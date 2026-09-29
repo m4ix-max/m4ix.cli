@@ -1,0 +1,23 @@
+name: App checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Swift tests
+        run: swift test --disable-sandbox
+      - name: Launcher isolation tests
+        run: bash Tests/Launcher/agent-launcher-test.sh
+      - name: Release build
+        run: swift build --disable-sandbox -c release

@@ -8,6 +8,7 @@ enum HostDiagnostics {
     static let logURL = HostPaths.profileBase.appendingPathComponent("host-events.jsonl")
     private static let previousURL = HostPaths.profileBase.appendingPathComponent("host-events.previous.jsonl")
     private static let maxBytes: UInt64 = 1_000_000
+    private static let writer = DispatchQueue(label: "m4ix.cli.diagnostics", qos: .utility)
 
     static func record(_ event: String, agent: String? = nil, session: UUID? = nil, exitCode: Int32? = nil,
                        details: [String: Any] = [:]) {
@@ -22,27 +23,33 @@ enum HostDiagnostics {
         entry.merge(details) { current, _ in current }
         guard let data = try? JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys]) else { return }
 
-        do {
-            try FileManager.default.createDirectory(
-                at: HostPaths.profileBase,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            if let size = (try? FileManager.default.attributesOfItem(atPath: logURL.path)[.size]) as? NSNumber,
-               size.uint64Value > maxBytes {
-                try? FileManager.default.removeItem(at: previousURL)
-                try FileManager.default.moveItem(at: logURL, to: previousURL)
+        let destination = logURL
+        let previous = previousURL
+        let directory = HostPaths.profileBase
+        let limit = maxBytes
+        writer.async {
+            do {
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+                if let size = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size]) as? NSNumber,
+                   size.uint64Value > limit {
+                    try? FileManager.default.removeItem(at: previous)
+                    try FileManager.default.moveItem(at: destination, to: previous)
+                }
+                if !FileManager.default.fileExists(atPath: destination.path) {
+                    FileManager.default.createFile(atPath: destination.path, contents: nil,
+                                                   attributes: [.posixPermissions: 0o600])
+                }
+                let handle = try FileHandle(forWritingTo: destination)
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data + Data([0x0A]))
+                try handle.close()
+            } catch {
+                // Diagnostics must never prevent a conversation from starting.
             }
-            if !FileManager.default.fileExists(atPath: logURL.path) {
-                FileManager.default.createFile(atPath: logURL.path, contents: nil,
-                                               attributes: [.posixPermissions: 0o600])
-            }
-            let handle = try FileHandle(forWritingTo: logURL)
-            try handle.seekToEnd()
-            try handle.write(contentsOf: data + Data([0x0A]))
-            try handle.close()
-        } catch {
-            // Diagnostics must never prevent a conversation from starting.
         }
     }
 

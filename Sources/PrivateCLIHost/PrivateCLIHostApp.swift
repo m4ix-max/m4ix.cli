@@ -121,6 +121,8 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
     private var pendingNotification: String?
     private var oscObservation: TerminalOscObservation?
     private var queuedPrompt: (text: String, images: [URL])?
+    @Published private(set) var isSendingPrompt = false
+    private var promptTask: Task<Void, Never>?
 
     init(agent: Agent, projectPath: String, title: String, initialPrompt: String? = nil,
          pendingResumeID: String? = nil) {
@@ -221,10 +223,13 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
     func sendPrompt(_ text: String, images: [URL] = []) -> Bool {
         let ready = screenAcceptsText()
         if acceptsPromptText != ready { acceptsPromptText = ready }
-        guard ready else { return false }
+        guard ready, !isSendingPrompt else { return false }
+        isSendingPrompt = true
         let bracketed = terminal.terminalStateSnapshot().bracketedPasteMode
-        Task { @MainActor [weak self] in
-            await self?.type(text, images: images, bracketed: bracketed)
+        promptTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isSendingPrompt = false; self.promptTask = nil }
+            await self.type(text, images: images, bracketed: bracketed)
         }
         return true
     }
@@ -240,7 +245,7 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
         }
         try? await Task.sleep(nanoseconds: UInt64(CLIPrompt.returnDelay * 1_000_000_000))
         // A dialog can open in the gap; Return would answer it.
-        guard screenAcceptsText() else { return }
+        guard !Task.isCancelled, screenAcceptsText() else { return }
         terminal.send(data: [0x0d][...])
     }
 
@@ -249,7 +254,7 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
     private func attach(_ images: [URL], bracketed: Bool) async -> Bool {
         var attached = CLIPrompt.imageMarkers(in: CLIPrompt.liveScreen(of: terminal))
         for image in images {
-            guard screenAcceptsText() else { return false }
+            guard !Task.isCancelled, screenAcceptsText() else { return false }
             terminal.send(data: CLIPrompt.pasteBytes(image.path, bracketed: bracketed)[...])
             attached += 1
             guard await waitForImageMarkers(attached) else {
@@ -263,6 +268,7 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
     private func waitForImageMarkers(_ count: Int) async -> Bool {
         let deadline = Date().addingTimeInterval(CLIPrompt.imageTimeout)
         while Date() < deadline {
+            guard !Task.isCancelled, hostsConversation else { return false }
             if CLIPrompt.imageMarkers(in: CLIPrompt.liveScreen(of: terminal)) >= count { return true }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
@@ -288,6 +294,8 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
 
     func stop() {
         guard case .running = state else { return }
+        promptTask?.cancel()
+        queuedPrompt = nil
         HostDiagnostics.record("session_stop_requested", agent: agent.rawValue, session: id)
         state = .stopping
         let pid = terminal.process.shellPid
@@ -438,6 +446,9 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         HostDiagnostics.record("session_exited", agent: agent.rawValue, session: id, exitCode: exitCode)
         state = .exited(exitCode)
+        promptTask?.cancel()
+        queuedPrompt = nil
+        acceptsPromptText = false
         turns.reset()
         isWorking = false
         hideCaret()
@@ -1123,7 +1134,7 @@ private struct PromptBar: View {
 
     private var mode: PromptComposer.Mode {
         guard session.hostsConversation else { return .start }
-        return session.acceptsPromptText ? .send : .blocked
+        return session.acceptsPromptText && !session.isSendingPrompt ? .send : .blocked
     }
 }
 
@@ -1134,6 +1145,7 @@ private struct WorkspaceBar: View {
     let onToggleSidebar: () -> Void
     let onNewConversation: () -> Void
     let onLogin: () -> Void
+    let onHandoff: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
@@ -1225,6 +1237,9 @@ private struct WorkspaceBar: View {
                         ? model.workingDirectory
                         : FileManager.default.homeDirectoryForCurrentUser)
                 }
+                Divider()
+                Button("Hand off to \(model.selected == .claude ? "Codex" : "Claude")…", action: onHandoff)
+                    .disabled(!session.hostsConversation)
                 Divider()
                 Button("Open private profile") { session.openProfileInFinder() }
                 Button("Show diagnostics in Finder") { HostDiagnostics.revealInFinder() }
@@ -1563,9 +1578,10 @@ private struct HostView: View {
     @State private var taskDrafts: [String: String] = [:]
     @State private var imageDrafts: [String: [PromptImage]] = [:]
     @State private var promptFocusRequest = 0
+    @State private var handoffDraft: HandoffDraft?
 
     private var taskDraftKey: String {
-        "\(model.workingDirectory.path):\(model.selected.rawValue)"
+        "\(model.workingDirectory.path):\(model.selected.rawValue):\(model.currentSession.id)"
     }
 
     private var imageDraft: Binding<[PromptImage]> {
@@ -1602,7 +1618,16 @@ private struct HostView: View {
                     sidebarVisible: sidebarVisible,
                     onToggleSidebar: { sidebarVisible.toggle() },
                     onNewConversation: { _ = model.startNewConversation() },
-                    onLogin: model.showLogin
+                    onLogin: model.showLogin,
+                    onHandoff: {
+                        let session = model.currentSession
+                        handoffDraft = HandoffDraft(
+                            source: model.selected.title,
+                            target: model.selected == .claude ? "Codex" : "Claude",
+                            projectPath: model.workingDirectory.path,
+                            context: CLIPrompt.liveScreen(of: session.terminal).joined(separator: "\n")
+                        )
+                    }
                 )
                 TerminalDeck(terminal: model.currentSession.terminal) { images in
                     imageDrafts[taskDraftKey, default: []] += images
@@ -1631,6 +1656,18 @@ private struct HostView: View {
         }
         .frame(minWidth: 960, minHeight: 600)
         .background(ElevateTheme.paper)
+        .sheet(item: $handoffDraft) { draft in
+            HandoffView(draft: draft) { prompt in
+                guard model.workingDirectory.path == draft.projectPath else { return false }
+                let previous = model.selected
+                model.selected = draft.target == "Codex" ? .codex : .claude
+                guard model.startNewConversation(initialPrompt: prompt) else {
+                    model.selected = previous
+                    return false
+                }
+                return true
+            }
+        }
         .alert("Stop this session?", isPresented: $showingStopConfirmation) {
             Button("Stop session", role: .destructive) {
                 if let pendingStopSession { model.stopLiveSession(pendingStopSession) }

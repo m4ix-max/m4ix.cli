@@ -18,8 +18,8 @@ let package = Package(
             name: "PrivateCLIHost",
             dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
             path: ".",
-            exclude: ["Packaging", "README.md", "Tests", "Tools", "outputs"],
-            sources: ["Sources/PrivateCLIHost/PrivateCLIHostApp.swift", "Sources/PrivateCLIHost/ConversationHistoryLoader.swift", "Sources/PrivateCLIHost/ElevateTheme.swift", "Sources/PrivateCLIHost/PromptComposer.swift", "Sources/PrivateCLIHost/CLIPrompt.swift", "Sources/PrivateCLIHost/PromptImages.swift", "Sources/PrivateCLIHost/CodexSessionIdentity.swift", "Sources/PrivateCLIHost/HostDiagnostics.swift", "Sources/PrivateCLIHost/PixelMarks.swift", "Sources/PrivateCLIHost/TerminalAttention.swift"],
+            exclude: ["Packaging", "README.md", "ROADMAP.md", "Tests", "Tools", "outputs"],
+            sources: ["Sources/PrivateCLIHost/PrivateCLIHostApp.swift", "Sources/PrivateCLIHost/ConversationHistoryLoader.swift", "Sources/PrivateCLIHost/ElevateTheme.swift", "Sources/PrivateCLIHost/PromptComposer.swift", "Sources/PrivateCLIHost/CLIPrompt.swift", "Sources/PrivateCLIHost/ProjectHandoff.swift", "Sources/PrivateCLIHost/PromptImages.swift", "Sources/PrivateCLIHost/CodexSessionIdentity.swift", "Sources/PrivateCLIHost/HostDiagnostics.swift", "Sources/PrivateCLIHost/PixelMarks.swift", "Sources/PrivateCLIHost/TerminalAttention.swift"],
             resources: [.copy("Resources/agent-launcher.sh")],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),

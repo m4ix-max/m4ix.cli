@@ -48,3 +48,22 @@ The launcher clears inherited Claude, Anthropic, Codex, and OpenAI environment v
 The sidebar reads conversation metadata from these private profiles. It does not copy transcripts into a second app database or mix in conversations from the ordinary Claude and Codex desktop profiles. The private profiles separate these CLI logins from the ordinary desktop apps. They are still in your macOS account and can access folders you grant them through normal filesystem permissions. This app provides one private profile per provider, not several accounts within one provider. Quitting the app gives hosted CLIs up to five seconds to stop, then force-stops any that remain; saved conversations remain available to resume on the next launch.
 
 Text that starts a new conversation without images is passed as a command-line argument when the CLI process starts. Other local processes with sufficient access may be able to inspect that argument while the process is running. Avoid putting secrets in the prompt bar when it reads **New conversation**.
+
+
+## Claude and Codex together
+
+Both providers use the selected project folder and keep separate live conversations. In a running conversation, open the session menu and choose **Hand off to Codex** or **Hand off to Claude**. Describe the next task and review the editable context before starting the other provider. The context begins with the current terminal screen only; add earlier decisions and relevant files yourself. The source conversation stays available.
+
+For sequential work, let one agent finish an implementation and hand it to the other for review. For concurrent work, give each agent separate files or use separate Git worktree folders as projects. The app does not yet create worktrees or merge their changes.
+
+Prompt text and image drafts belong to individual live sessions. Delivery is serialized while images attach, and pending delivery is cancelled when the process stops.
+
+## Development checks
+
+```sh
+swift test --disable-sandbox
+bash Tests/Launcher/agent-launcher-test.sh
+swift build --disable-sandbox -c release
+```
+
+GitHub Actions runs the same checks. Product requirements and remaining runtime verification are tracked in ROADMAP.md.
