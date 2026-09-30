@@ -81,6 +81,12 @@ enum HostPaths {
 /// session from one that stopped answering.
 final class TrackedTerminalView: LocalProcessTerminalView {
     let activity = TerminalActivityClock()
+    var inputIsConcealed = false
+    var onPromptFocus: (() -> Void)?
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        if inputIsConcealed { onPromptFocus?() }
+    }
     /// Hands images from ⌘V to the prompt bar. SwiftTerm pastes only text,
     /// so an image would otherwise paste as nothing.
     var onPasteImages: (([PromptImage]) -> Void)?
@@ -1119,31 +1125,72 @@ private final class TerminalDeckView: NSView {
     var onPasteImages: (([PromptImage]) -> Void)?
     private var shownTerminal: LocalProcessTerminalView?
     private var terminalConstraints: [NSLayoutConstraint] = []
+    var agent: Agent = .claude
+    var hidesPrompt = true
+    var onPromptFocus: (() -> Void)?
+    private let promptCover = NSView()
+    private var coverTimer: Timer?
+
+    private func updatePromptCover() {
+        guard let terminal = shownTerminal else { return }
+        let snapshot = terminal.terminalStateSnapshot()
+        let screen = snapshot.visibleRows.map { $0.text.replacingOccurrences(of: "\u{0}", with: " ") }
+        let row = hidesPrompt ? CLIPrompt.inputStartRow(screen: screen, agent: agent) : nil
+        guard let row else {
+            let wasConcealed = !promptCover.isHidden
+            promptCover.isHidden = true
+            (terminal as? TrackedTerminalView)?.inputIsConcealed = false
+            if wasConcealed, window?.isKeyWindow == true { window?.makeFirstResponder(terminal) }
+            return
+        }
+        let newlyConcealed = promptCover.isHidden
+        (terminal as? TrackedTerminalView)?.inputIsConcealed = true
+        if newlyConcealed { onPromptFocus?() }
+        let cellHeight = terminal.bounds.height / CGFloat(max(1, snapshot.dimensions.rows))
+        let height = terminal.bounds.height - CGFloat(row) * cellHeight
+        promptCover.frame = NSRect(x: terminal.frame.minX, y: terminal.frame.minY, width: terminal.frame.width, height: height)
+        promptCover.isHidden = false
+    }
+
+    override func layout() {
+        super.layout()
+        updatePromptCover()
+    }
+
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = ElevateTheme.terminalBackground.cgColor
+        promptCover.wantsLayer = true
+        promptCover.layer?.backgroundColor = ElevateTheme.terminalBackground.cgColor
+        promptCover.isHidden = true
+        addSubview(promptCover)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if let shownTerminal, window != nil {
-            window?.makeFirstResponder(shownTerminal)
+        coverTimer?.invalidate()
+        coverTimer = nil
+        if window != nil {
+            coverTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                self?.updatePromptCover()
+            }
         }
     }
 
     func show(_ terminal: LocalProcessTerminalView) {
         (terminal as? TrackedTerminalView)?.onPasteImages = onPasteImages
+        (terminal as? TrackedTerminalView)?.onPromptFocus = onPromptFocus
         guard shownTerminal !== terminal || terminal.superview !== self else { return }
         NSLayoutConstraint.deactivate(terminalConstraints)
         shownTerminal?.removeFromSuperview()
         terminal.removeFromSuperview()
         shownTerminal = terminal
         terminal.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(terminal)
+        addSubview(terminal, positioned: .below, relativeTo: promptCover)
         // The deck shares the terminal's background, so the inset reads as margin.
         terminalConstraints = [
             terminal.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ElevateTheme.spacing24),
@@ -1152,23 +1199,32 @@ private final class TerminalDeckView: NSView {
             terminal.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -ElevateTheme.spacing16)
         ]
         NSLayoutConstraint.activate(terminalConstraints)
-        if window != nil { window?.makeFirstResponder(terminal) }
+        if !hidesPrompt, window != nil { window?.makeFirstResponder(terminal) }
     }
 }
 
 private struct TerminalDeck: NSViewRepresentable {
     let terminal: LocalProcessTerminalView
+    let agent: Agent
+    let hidesPrompt: Bool
+    let onPromptFocus: () -> Void
     let onPasteImages: ([PromptImage]) -> Void
 
     func makeNSView(context: Context) -> TerminalDeckView {
         let view = TerminalDeckView(frame: .zero)
         view.onPasteImages = onPasteImages
+        view.agent = agent
+        view.hidesPrompt = hidesPrompt
+        view.onPromptFocus = onPromptFocus
         view.show(terminal)
         return view
     }
 
     func updateNSView(_ view: TerminalDeckView, context: Context) {
         view.onPasteImages = onPasteImages
+        view.agent = agent
+        view.hidesPrompt = hidesPrompt
+        view.onPromptFocus = onPromptFocus
         view.show(terminal)
     }
 }
@@ -1227,6 +1283,7 @@ private struct WorkspaceBar: View {
     let onLogin: () -> Void
     let onHandoff: () -> Void
     let onProjectTools: () -> Void
+    let showCLIInput: Binding<Bool>
 
     var body: some View {
         GeometryReader { geometry in
@@ -1245,10 +1302,6 @@ private struct WorkspaceBar: View {
             .padding(.trailing, ElevateTheme.spacing16)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("WORKING IN")
-                    .font(ElevateTheme.utility(10, medium: true))
-                    .tracking(0.3)
-                    .foregroundStyle(ElevateTheme.graphite)
                 Text(model.workingDirectory.lastPathComponent)
                     .font(ElevateTheme.serif(compact ? 20 : 24))
                     .foregroundStyle(ElevateTheme.ink)
@@ -1331,6 +1384,8 @@ private struct WorkspaceBar: View {
             .padding(.trailing, ElevateTheme.spacing8)
 
             Menu {
+                Toggle("Show CLI input and status", isOn: showCLIInput)
+                Divider()
                 Button("Log in or view login") { onLogin() }
                     .disabled(!model.isCurrentProjectAvailable)
                 Button("Check account status") {
@@ -1356,10 +1411,10 @@ private struct WorkspaceBar: View {
             .accessibilityLabel("More session actions")
             .help("Session actions")
         }
-        .frame(height: 84)
+        .frame(height: 68)
         .padding(.horizontal, ElevateTheme.spacing24)
         }
-        .frame(height: 84)
+        .frame(height: 68)
         .background(ElevateTheme.paper)
         .overlay(alignment: .bottom) {
             Rectangle().fill(ElevateTheme.border).frame(height: ElevateTheme.hairlineWidth)
@@ -1402,7 +1457,7 @@ private struct ProjectSidebar: View {
                 Spacer()
             }
             .padding(.horizontal, ElevateTheme.spacing24)
-            .frame(height: 84)
+            .frame(height: 68)
             .overlay(alignment: .bottom) {
                 Rectangle().fill(ElevateTheme.border).frame(height: ElevateTheme.hairlineWidth)
             }
@@ -1682,6 +1737,7 @@ struct HostView: View {
     @State private var pendingSavedConversation: ConversationRecord?
     @State private var taskDrafts: [String: String] = [:]
     @State private var imageDrafts: [String: [PromptImage]] = [:]
+    @State private var showCLIInput = false
     @State private var promptFocusRequest = 0
     @State private var handoffDraft: HandoffDraft?
     @State private var projectToolsRequest: ProjectToolsRequest?
@@ -1743,9 +1799,10 @@ struct HostView: View {
                             context: CLIPrompt.liveScreen(of: session.terminal).joined(separator: "\n")
                         )
                     },
-                    onProjectTools: { projectToolsRequest = ProjectToolsRequest(directory: model.workingDirectory) }
+                    onProjectTools: { projectToolsRequest = ProjectToolsRequest(directory: model.workingDirectory) },
+                    showCLIInput: $showCLIInput
                 )
-                TerminalDeck(terminal: model.currentSession.terminal) { images in
+                TerminalDeck(terminal: model.currentSession.terminal, agent: model.selected, hidesPrompt: !showCLIInput, onPromptFocus: { promptFocusRequest += 1 }) { images in
                     imageDrafts[taskDraftKey, default: []] += images
                     promptFocusRequest += 1
                 }
@@ -1767,15 +1824,20 @@ struct HostView: View {
                     }
                 )
                 .id(taskDraftKey)
+
             }
             // Images dropped on the terminal wait in the bar, since the
             // terminal itself does not accept drops.
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
                 let key = taskDraftKey
-                PromptImageStore.load(providers) { imageDrafts[key, default: []] += $0 }
+                PromptImageStore.load(providers) {
+                    imageDrafts[key, default: []] += $0
+                    promptFocusRequest += 1
+                }
                 return true
             }
         }
+        .onChange(of: taskDraftKey) { _ in promptFocusRequest += 1 }
         .frame(minWidth: 960, minHeight: 600)
         .background(ElevateTheme.paper)
         .sheet(item: $projectToolsRequest) { request in

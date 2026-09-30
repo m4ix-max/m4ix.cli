@@ -85,6 +85,22 @@ enum CLIPrompt {
         return !isNumberedOption(last)
     }
 
+    /// Only conceal an input we recognize in the actual visible viewport.
+    /// Menus, approvals, and scrolled conversation output remain visible.
+    static func inputStartRow(screen: [String], agent: Agent) -> Int? {
+        switch agent {
+        case .claude:
+            guard claudeAcceptsText(screen: screen),
+                  let row = screen.indices.last(where: { trimmed(screen[$0]).hasPrefix("❯") }), row > 0,
+                  isRule(screen[row - 1]) else { return nil }
+            return row - 1
+        case .codex:
+            guard codexAcceptsText(screen: screen),
+                  let row = screen.indices.last(where: { trimmed(screen[$0]).hasPrefix("›") }) else { return nil }
+            return row > 0 && screen[row - 1].trimmingCharacters(in: .whitespaces).isEmpty ? row - 1 : row
+        }
+    }
+
     private static func trimmed(_ line: String) -> Substring {
         line.drop(while: { $0 == " " })
     }

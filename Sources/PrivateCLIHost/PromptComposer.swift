@@ -61,12 +61,6 @@ struct PromptComposer: View {
         isEnabled && !isBusy && mode != .blocked && !(trimmedTask.isEmpty && images.isEmpty)
     }
 
-    private var heading: String { mode == .start ? "NEW CONVERSATION" : "PROMPT" }
-
-    private var keyHint: String {
-        isBusy ? "SENDING PROMPT" : mode == .blocked ? "ANSWER THE TERMINAL FIRST" : "RETURN TO SEND  /  ⇧ RETURN NEW LINE"
-    }
-
     private var placeholder: String {
         mode == .start ? "Start a conversation with \(agentName)…" : "Write to \(agentName)…"
     }
@@ -78,28 +72,9 @@ struct PromptComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: ElevateTheme.spacing8) {
-            HStack(alignment: .firstTextBaseline, spacing: ElevateTheme.spacing16) {
-                Text(heading)
-                    .font(ElevateTheme.utility(11, medium: true))
-                    .tracking(0.3)
-                    .foregroundStyle(ElevateTheme.ink)
-
-                Spacer(minLength: ElevateTheme.spacing16)
-
-                Text("\(agentName.uppercased())  /  \(projectName.uppercased())")
-                    .font(ElevateTheme.utility(10))
-                    .tracking(0.2)
-                    .foregroundStyle(ElevateTheme.graphite)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help("Send to \(agentName) in \(projectName)")
-
-                Text(keyHint)
-                    .font(ElevateTheme.utility(10, medium: mode == .blocked))
-                    .tracking(0.2)
-                    .foregroundStyle(mode == .blocked ? ElevateTheme.ink : ElevateTheme.graphite)
-                    .fixedSize()
-            }
+            Text(isBusy ? "Sending…" : mode == .blocked ? "Answer the menu or approval in the terminal first." : "Return to send · Shift Return for a new line")
+                .font(.system(size: 11))
+                .foregroundStyle(ElevateTheme.graphite)
 
             if !images.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -115,7 +90,7 @@ struct PromptComposer: View {
                 ZStack(alignment: .topLeading) {
                     if taskText.isEmpty {
                         Text(placeholder)
-                            .font(ElevateTheme.serif(16))
+                            .font(.system(size: 14))
                             .foregroundStyle(ElevateTheme.graphite)
                             .padding(.leading, 5)
                             .padding(.top, 4)
@@ -305,7 +280,7 @@ private struct SubmittingTextView: NSViewRepresentable {
         textView.allowsUndo = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
-        textView.font = ElevateTheme.serifNS(16)
+        textView.font = NSFont.systemFont(ofSize: 14)
         textView.textColor = ElevateTheme.inkNS
         textView.insertionPointColor = ElevateTheme.inkNS
         textView.textContainerInset = NSSize(width: 0, height: 4)

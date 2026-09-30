@@ -3,6 +3,13 @@ import XCTest
 @testable import PrivateCLIHost
 
 final class CLIPromptTests: XCTestCase {
+    func testConcealedInputLeavesApprovalsAndUnrecognizedOutputVisible() {
+        XCTAssertEqual(CLIPrompt.inputStartRow(screen: ["Result", "", "› Ask Codex", "Model · path"], agent: .codex), 1)
+        XCTAssertNil(CLIPrompt.inputStartRow(screen: ["Approve?", "› 1. Allow", "  2. Deny"], agent: .codex))
+        XCTAssertEqual(CLIPrompt.inputStartRow(screen: ["Result", "──────", "❯", "──────", "Status"], agent: .claude), 1)
+        XCTAssertNil(CLIPrompt.inputStartRow(screen: ["Result", "❯ old quoted prompt", "Other output"], agent: .claude))
+    }
+
     private let rule = String(repeating: "─", count: 60)
 
     // Screens captured from Claude Code 2.1.285 and Codex 0.158.0 and 0.159.1.
