@@ -34,3 +34,21 @@ Automated checks cover concurrent hosted processes, project routing, cancellatio
 The packaged release passed real Claude and Codex prompts, cross-provider handoff, conversation restoration, image delivery, and shutdown. A five-second idle sample with both terminals open measured 0.35% CPU and 95 MB resident memory on the development machine; this is a local sample, not a guarantee for every machine or workload. Extended provider checks also passed multiple images and image delivery after resizing.
 
 GitHub CI runs Swift tests, launcher checks, release packaging, and artifact upload. Authenticated provider checks are opt-in local checks because CI has no user credentials.
+
+## External release preparation for 0.11.1
+
+Swift checks passed on 2026-09-30: 42 tests, one opt-in test skipped, zero
+failures. Launcher isolation checks passed. The packaged 0.11.1 app passed
+real Claude and Codex prompts, images, handoff, durable history, resumption,
+and shutdown. Its local idle sample measured 0.96% CPU and 101 MB resident
+memory. These measurements do not certify other machines or workloads.
+
+Packaging now supports Developer ID signing, hardened runtime, notarization,
+stapling, Gatekeeper checks, and SHA-256 checksums. The local package and
+checksum passed verification. The production path has not been exercised:
+this Mac currently has no Developer ID Application certificate.
+
+The GitHub repository remains private. Public release requires the source
+license decision, distribution credentials, a signed production build, and
+clean-machine Gatekeeper verification. Release notes and procedure live in
+Packaging. No production release has been published.

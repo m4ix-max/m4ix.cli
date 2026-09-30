@@ -5,17 +5,28 @@ umask 077
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-OUTPUT_DIR="$PROJECT_DIR/outputs"
+OUTPUT_DIR="${M4IX_OUTPUT_DIR:-$PROJECT_DIR/outputs}"
 APP_NAME='m4ix.CLI'
 source "$SCRIPT_DIR/version.env"
 INSTALL_BUILD=false
+PRODUCTION_BUILD=false
 case "${1:-}" in
     --install) INSTALL_BUILD=true ;;
-    --help) printf 'Usage: bash Packaging/build-and-package.sh [--install]\n'; exit 0 ;;
+    --production) PRODUCTION_BUILD=true ;;
+    --help) printf 'Usage: bash Packaging/build-and-package.sh [--install|--production]\n'; exit 0 ;;
     '') ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 1 ;;
 esac
 [[ $# -le 1 ]] || { printf 'Too many arguments\n' >&2; exit 1; }
+[[ "$OUTPUT_DIR" == /* ]] || { printf 'M4IX_OUTPUT_DIR must be an absolute path.\n' >&2; exit 1; }
+if [[ "$PRODUCTION_BUILD" == true ]]; then
+    [[ "${M4IX_SIGNING_IDENTITY:-}" == 'Developer ID Application: '* ]] || {
+        printf 'Production packaging requires M4IX_SIGNING_IDENTITY (Developer ID Application).\n' >&2; exit 1;
+    }
+    [[ -n "${M4IX_NOTARY_PROFILE:-}" ]] || {
+        printf 'Production packaging requires M4IX_NOTARY_PROFILE (notarytool keychain profile).\n' >&2; exit 1;
+    }
+fi
 EXECUTABLE='PrivateCLIHost'
 APP_PATH="$OUTPUT_DIR/$APP_NAME $APP_VERSION.app"
 ZIP_PATH="$OUTPUT_DIR/$APP_NAME $APP_VERSION.zip"
@@ -125,13 +136,26 @@ if ! iconutil -c icns "$ICONSET" -o "$RESOURCES_DIR/AppIcon.icns"; then
 fi
 
 plutil -lint "$STAGED_APP/Contents/Info.plist"
-codesign --force --sign - --timestamp=none "$STAGED_APP"
+if [[ "$PRODUCTION_BUILD" == true ]]; then
+    codesign --force --sign "$M4IX_SIGNING_IDENTITY" --options runtime --timestamp "$STAGED_APP"
+else
+    codesign --force --sign - --timestamp=none "$STAGED_APP"
+fi
 codesign --verify --strict --verbose=2 "$STAGED_APP"
 
 STAGED_ZIP="$STAGING_DIR/$APP_NAME.zip"
 ditto -c -k --sequesterRsrc --keepParent "$STAGED_APP" "$STAGED_ZIP"
+if [[ "$PRODUCTION_BUILD" == true ]]; then
+    xcrun notarytool submit "$STAGED_ZIP" --keychain-profile "$M4IX_NOTARY_PROFILE" --wait
+    xcrun stapler staple "$STAGED_APP"
+    xcrun stapler validate "$STAGED_APP"
+    spctl --assess --type execute --verbose=2 "$STAGED_APP"
+    rm "$STAGED_ZIP"
+    ditto -c -k --sequesterRsrc --keepParent "$STAGED_APP" "$STAGED_ZIP"
+fi
 mv "$STAGED_APP" "$APP_PATH"
 mv "$STAGED_ZIP" "$ZIP_PATH"
+(cd "$OUTPUT_DIR" && shasum -a 256 "$APP_NAME $APP_VERSION.zip" > "$APP_NAME $APP_VERSION.zip.sha256")
 
 printf 'App: %s\nArchive: %s\n' "$APP_PATH" "$ZIP_PATH"
 

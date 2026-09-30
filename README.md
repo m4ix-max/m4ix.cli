@@ -14,7 +14,7 @@ bash Packaging/build-and-package.sh --install
 
 The source lives in Dropbox. `.build` is a symlink to `~/Library/Caches/m4ix.cli/build`, so SwiftPM's cache of nearly a gigabyte never syncs. On a Mac where that link is missing, recreate it before building: `mkdir -p ~/Library/Caches/m4ix.cli/build && ln -s ~/Library/Caches/m4ix.cli/build .build`.
 
-The script builds `PrivateCLIHost` in release mode and creates `outputs/m4ix.CLI 0.11.0.app` and `outputs/m4ix.CLI 0.11.0.zip` in this folder. With `--install`, it installs the build as `/Applications/m4ix.CLI.app`, replacing the copy there, so quitting and reopening the app is all an update needs. The swap is safe while the app runs, and the running app carries on with the previous build until it is reopened. Keep that one installed copy only: every build shares the bundle ID `com.maxblomqvist.privateclis`, so a second copy lets macOS open the wrong version. To go back to an earlier build, run `bash Packaging/install.sh "outputs/m4ix.CLI <version>.app"`. The app was called Private CLIs before 0.5.0; the bundle ID and private profiles are unchanged, so logins and history carry over. The bundle is signed locally with an ad hoc signature; it is not notarized for distribution. It includes SwiftTerm's MIT license in `Contents/Resources/Licenses`.
+The script builds `PrivateCLIHost` in release mode and creates `outputs/m4ix.CLI 0.11.1.app` and `outputs/m4ix.CLI 0.11.1.zip` in this folder. With `--install`, it installs the build as `/Applications/m4ix.CLI.app`, replacing the copy there, so quitting and reopening the app is all an update needs. The swap is safe while the app runs, and the running app carries on with the previous build until it is reopened. Keep that one installed copy only: every build shares the bundle ID `com.maxblomqvist.privateclis`, so a second copy lets macOS open the wrong version. To go back to an earlier build, run `bash Packaging/install.sh "outputs/m4ix.CLI <version>.app"`. The app was called Private CLIs before 0.5.0; the bundle ID and private profiles are unchanged, so logins and history carry over. The bundle is signed locally with an ad hoc signature; it is not notarized for distribution. It includes SwiftTerm's MIT license in `Contents/Resources/Licenses`.
 
 ## Use
 
@@ -85,3 +85,11 @@ The verification opens a temporary app session, uses a separate UI preferences s
 `M4IX_REAL_CLI_TESTS=1 swift test --disable-sandbox --filter RealCLISmokeTests` also verifies live providers through the SwiftPM build. These tests are skipped in CI, which uses inert CLI fixtures for terminal lifecycle and prompt delivery checks.
 
 Release version and build number live in `Packaging/version.env`. Packaging without `--install` leaves the installed app alone, so a build can be verified before installation.
+
+## External distribution
+
+Production packaging uses `bash Packaging/build-and-package.sh --production`
+with a Developer ID Application identity and a notarization keychain profile.
+It verifies Gatekeeper acceptance and produces a SHA-256 checksum alongside the
+ZIP. See `Packaging/RELEASE.md` for the release procedure and required checks.
+Ordinary local and CI packages use ad hoc signatures and are not notarized.
