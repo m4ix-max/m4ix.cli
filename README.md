@@ -2,6 +2,10 @@
 
 A small macOS app for Claude and Codex. It hosts each installed command-line tool in a real terminal, with projects, live sessions, and saved conversations in the sidebar. The app does not contain either CLI or any account credentials.
 
+Open source under the MIT license. SwiftTerm retains its own MIT license;
+both notices are included in packaged apps. Claude and Codex are installed
+separately and remain subject to their providers' terms.
+
 The interface follows the NoA 2.0 Elevate design system: paper or ink surfaces that follow the macOS appearance, a dark terminal, ruled lists, and a lime action for starting work. It uses locally installed NoA 2.0 typefaces when available, with system fallbacks. Licensed font files are not included in the app.
 
 ## Build and open

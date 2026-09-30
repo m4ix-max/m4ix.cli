@@ -79,6 +79,7 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/Licenses"
 install -m 755 "$BUILT_EXECUTABLE" "$MACOS_DIR/$EXECUTABLE"
 install -m 755 "$LAUNCHER" "$RESOURCES_DIR/agent-launcher.sh"
 install -m 644 "$LICENSE_SOURCE" "$RESOURCES_DIR/Licenses/SwiftTerm-LICENSE.txt"
+install -m 644 "$PROJECT_DIR/LICENSE" "$RESOURCES_DIR/Licenses/m4ix.CLI-LICENSE.txt"
 
 # Preserve any SwiftPM resource bundles in the app's standard resource directory.
 for resource_bundle in "$BIN_DIR"/*.bundle; do

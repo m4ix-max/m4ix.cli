@@ -11,6 +11,6 @@ Requires macOS 13 or later. Current locally verified binaries target Apple
 silicon. Install and authenticate Claude and Codex separately. Neither CLI,
 account credentials, licensed fonts, nor optional animation tools are bundled.
 
-Source license and production signing remain pending. No public production
+Source is available under the MIT license. Production signing remains pending. No public production
 artifact has been published. This file is a release draft until those checks
 and clean-machine verification are complete.
