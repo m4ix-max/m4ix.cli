@@ -10,6 +10,17 @@ final class CLIPromptTests: XCTestCase {
         XCTAssertNil(CLIPrompt.inputStartRow(screen: ["Result", "❯ old quoted prompt", "Other output"], agent: .claude))
     }
 
+    func testCodexProcessFooterMovesToActivityWithoutConcealingQuestions() {
+        let footer = "  2 background terminals running · /ps to view · /stop to close"
+        let screen = ["• Result", "", footer, "", "› Ask Codex", "Status"]
+        XCTAssertEqual(CLIPrompt.backgroundTerminalCount(in: screen), 2)
+        XCTAssertEqual(CLIPrompt.inputStartRow(screen: screen, agent: .codex), 2)
+        XCTAssertNil(CLIPrompt.inputStartRow(screen: screen + ["› 1. Recommended", "  2. Alternative"], agent: .codex))
+        XCTAssertEqual(CLIPrompt.backgroundTerminalCount(in: ["• I started 2 background terminals running"]), 0)
+        // A footer quoted in output does not hide the conversation below it.
+        XCTAssertEqual(CLIPrompt.inputStartRow(screen: [footer, "• More output", "", "› Ask Codex"], agent: .codex), 2)
+    }
+
     private let rule = String(repeating: "─", count: 60)
 
     // Screens captured from Claude Code 2.1.285 and Codex 0.158.0 and 0.159.1.

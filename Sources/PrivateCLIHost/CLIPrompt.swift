@@ -97,8 +97,24 @@ enum CLIPrompt {
         case .codex:
             guard codexAcceptsText(screen: screen),
                   let row = screen.indices.last(where: { trimmed(screen[$0]).hasPrefix("›") }) else { return nil }
-            return row > 0 && screen[row - 1].trimmingCharacters(in: .whitespaces).isEmpty ? row - 1 : row
+            var start = row
+            while start > 0 && screen[start - 1].trimmingCharacters(in: .whitespaces).isEmpty { start -= 1 }
+            if start > 0 && backgroundTerminalCount(in: [screen[start - 1]]) > 0 { start -= 1 }
+            return start
         }
+    }
+
+    /// Codex's live process footer, not arbitrary mentions in the conversation.
+    private static let processFooter = try! NSRegularExpression(
+        pattern: #"^\s*(\d+) background terminals? running\s*[·•]\s*/ps to view\s*[·•]\s*/stop to close\s*$"#)
+
+    static func backgroundTerminalCount(in screen: [String]) -> Int {
+        for line in screen.reversed() {
+            guard let match = processFooter.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                  let range = Range(match.range(at: 1), in: line) else { continue }
+            return Int(line[range]) ?? 0
+        }
+        return 0
     }
 
     private static func trimmed(_ line: String) -> Substring {

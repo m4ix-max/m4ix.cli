@@ -27,6 +27,7 @@ struct PromptComposer: View {
     let isBusy: Bool
     let isEnabled: Bool
     let onSubmit: (String, [PromptImage]) -> Bool
+    let onTerminal: () -> Void
 
     @Binding private var taskText: String
     @Binding private var images: [PromptImage]
@@ -40,6 +41,7 @@ struct PromptComposer: View {
         projectName: String,
         isBusy: Bool = false,
         isEnabled: Bool = true,
+        onTerminal: @escaping () -> Void = {},
         onSubmit: @escaping (String, [PromptImage]) -> Bool
     ) {
         self._taskText = text
@@ -51,6 +53,7 @@ struct PromptComposer: View {
         self.isBusy = isBusy
         self.isEnabled = isEnabled
         self.onSubmit = onSubmit
+        self.onTerminal = onTerminal
     }
 
     private var trimmedTask: String {
@@ -66,27 +69,36 @@ struct PromptComposer: View {
     }
 
     private var buttonTitle: String {
-        if isBusy { return mode == .start ? "STARTING…" : "SENDING…" }
-        return mode == .start ? "START" : "SEND"
+        if isBusy { return mode == .start ? "Starting…" : "Sending…" }
+        return mode == .start ? "Start" : "Send"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ElevateTheme.spacing8) {
-            Text(isBusy ? "Sending…" : mode == .blocked ? "Answer the menu or approval in the terminal first." : "Return to send · Shift Return for a new line")
-                .font(.system(size: 11))
+        VStack(alignment: .leading, spacing: 10) {
+            if mode == .blocked {
+                HStack(spacing: 8) {
+                    Image(systemName: "keyboard")
+                    Text("A question or approval is waiting in the terminal.")
+                    Spacer(minLength: 8)
+                    Button("Answer in terminal", action: onTerminal)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(ElevateTheme.ink)
+                        .accessibilityIdentifier("promptAnswerTerminal")
+                }
+                .font(.system(size: 12))
                 .foregroundStyle(ElevateTheme.graphite)
+            }
 
-            if !images.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: ElevateTheme.spacing8) {
-                        ForEach(images) { image in
-                            PromptImageChip(image: image) { images.removeAll { $0 == image } }
+            VStack(alignment: .leading, spacing: 8) {
+                if !images.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(images) { image in
+                                PromptImageChip(image: image) { images.removeAll { $0 == image } }
+                            }
                         }
                     }
                 }
-            }
-
-            HStack(alignment: .bottom, spacing: ElevateTheme.spacing16) {
                 ZStack(alignment: .topLeading) {
                     if taskText.isEmpty {
                         Text(placeholder)
@@ -97,7 +109,6 @@ struct PromptComposer: View {
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
-
                     SubmittingTextView(
                         text: $taskText,
                         isEditable: isEnabled && !isBusy,
@@ -105,64 +116,66 @@ struct PromptComposer: View {
                         onSubmit: submit,
                         onImages: { images += $0 }
                     )
-                    .frame(height: 74)
+                    .frame(height: min(132, 44 + CGFloat(taskText.filter { $0 == "\n" }.count) * 18))
                     .accessibilityLabel("Prompt for \(agentName) in \(projectName)")
                     .accessibilityHint(accessibilityHint)
                     .accessibilityIdentifier("promptInput")
                 }
-                .padding(8)
-                .background(ElevateTheme.paper)
-                .overlay {
-                    RoundedRectangle(cornerRadius: ElevateTheme.controlRadius)
-                        .strokeBorder(ElevateTheme.border, lineWidth: ElevateTheme.hairlineWidth)
-                }
-
-                Button(action: chooseImages) {
-                    Image(systemName: "photo.badge.plus")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(isEnabled ? ElevateTheme.ink : ElevateTheme.graphite)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!isEnabled)
-                .help("Add images")
-                .accessibilityLabel("Add images")
-                .accessibilityIdentifier("promptAddImages")
-
-                Button(action: submit) {
-                    HStack(spacing: ElevateTheme.spacing8) {
-                        Text(buttonTitle)
-                            .font(ElevateTheme.utility(11, medium: true))
-                        if !isBusy {
-                            Image(systemName: "arrow.up.right")
-                                .font(.system(size: 11, weight: .medium))
-                        }
+                HStack(spacing: 12) {
+                    Button(action: chooseImages) {
+                        Image(systemName: "photo.badge.plus")
+                            .frame(width: 28, height: 28)
                     }
-                    .foregroundStyle(canSubmit ? ElevateTheme.onSignal : ElevateTheme.graphite)
-                    .padding(.horizontal, ElevateTheme.spacing16)
-                    .frame(height: 44)
-                    .background(
-                        canSubmit ? ElevateTheme.signal : ElevateTheme.paperDeep,
-                        in: RoundedRectangle(cornerRadius: ElevateTheme.controlRadius)
-                    )
+                    .buttonStyle(.plain)
+                    .disabled(!isEnabled || isBusy)
+                    .help("Add images")
+                    .accessibilityLabel("Add images")
+                    .accessibilityIdentifier("promptAddImages")
+
+                    Button(action: onTerminal) {
+                        Image(systemName: "keyboard")
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Terminal controls (⌘⇧T)")
+                    .accessibilityLabel("Use terminal controls")
+                    .accessibilityIdentifier("promptTerminalControls")
+                    Spacer()
+                    Text("↵ Send   ⇧↵ New line")
+                        .font(.system(size: 10))
+                        .foregroundStyle(ElevateTheme.graphite)
+                        .accessibilityHidden(true)
+                    Button(action: submit) {
+                        HStack(spacing: 6) {
+                            Text(buttonTitle).font(.system(size: 12, weight: .medium))
+                            Image(systemName: "arrow.up").font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(canSubmit ? ElevateTheme.onSignal : ElevateTheme.graphite)
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(canSubmit ? ElevateTheme.signal : ElevateTheme.paperDeep,
+                                    in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSubmit)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .accessibilityLabel(mode == .start ? "Start a conversation" : "Send prompt")
+                    .accessibilityIdentifier("promptSubmit")
                 }
-                .buttonStyle(.plain)
-                .disabled(!canSubmit)
-                .keyboardShortcut(.return, modifiers: .command)
-                .accessibilityLabel(mode == .start ? "Start a conversation" : "Send prompt")
-                .accessibilityHint("Return")
-                .accessibilityIdentifier("promptSubmit")
+                .foregroundStyle(ElevateTheme.graphite)
+            }
+            .padding(12)
+            .background(ElevateTheme.paperDeep.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10).strokeBorder(ElevateTheme.borderSubtle, lineWidth: 1)
             }
         }
-        .padding(.horizontal, ElevateTheme.spacing24)
-        .padding(.vertical, ElevateTheme.spacing16)
+        .frame(maxWidth: 1040)
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity)
         .background(ElevateTheme.paper)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(ElevateTheme.border)
-                .frame(height: ElevateTheme.hairlineWidth)
-        }
     }
 
     private var accessibilityHint: String {
@@ -227,7 +240,19 @@ private struct PromptImageChip: View {
 
 /// Takes images from ⌘V and drops as attachments, where a plain text view
 /// would paste nothing or insert the file's path.
-private final class PromptTextView: NSTextView {
+final class PromptTextView: NSTextView {
+    var wantsPromptFocus = false
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if wantsPromptFocus { focusWhenAttached() }
+    }
+    func focusWhenAttached() {
+        wantsPromptFocus = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.wantsPromptFocus, let window = self.window else { return }
+            if window.makeFirstResponder(self) { self.wantsPromptFocus = false }
+        }
+    }
     var onImages: (([PromptImage]) -> Void)?
 
     override func paste(_ sender: Any?) {
@@ -285,6 +310,7 @@ private struct SubmittingTextView: NSViewRepresentable {
         textView.insertionPointColor = ElevateTheme.inkNS
         textView.textContainerInset = NSSize(width: 0, height: 4)
         textView.string = text
+        if focusRequest > 0 { textView.focusWhenAttached() }
         return scrollView
     }
 
@@ -294,7 +320,7 @@ private struct SubmittingTextView: NSViewRepresentable {
         textView.onImages = onImages
         if focusRequest != context.coordinator.focusRequest {
             context.coordinator.focusRequest = focusRequest
-            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+            textView.focusWhenAttached()
         }
         if textView.string != text { textView.string = text }
         textView.isEditable = isEditable

@@ -130,6 +130,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// Whether the CLI's own input line holds the screen, so the prompt
     /// bar can type into it. Refreshed once a second while shown.
     @Published private(set) var acceptsPromptText = false
+    @Published private(set) var backgroundTerminalCount = 0
     var onCodexIdentityPrefix: (() -> Void)?
     /// The last moment this session was on screen in the active app.
     var lastSeen: Date?
@@ -158,7 +159,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
 
         terminal.processDelegate = self
         terminal.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        terminal.lineSpacing = 1.2
+        terminal.lineSpacing = 1.3
         terminal.nativeForegroundColor = ElevateTheme.terminalForeground
         terminal.nativeBackgroundColor = ElevateTheme.terminalBackground
         terminal.caretColor = ElevateTheme.nsSignal
@@ -229,6 +230,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     func refreshPromptReadiness() {
         let wasReady = acceptsPromptText
         let ready = screenAcceptsText()
+        let count = agent == .codex ? CLIPrompt.backgroundTerminalCount(in: CLIPrompt.liveScreen(of: terminal)) : 0
+        if backgroundTerminalCount != count { backgroundTerminalCount = count }
         if acceptsPromptText != ready { acceptsPromptText = ready }
         if wasReady, ready, let queued = queuedPrompt {
             queuedPrompt = nil
@@ -1146,7 +1149,9 @@ private final class TerminalDeckView: NSView {
         let newlyConcealed = promptCover.isHidden
         (terminal as? TrackedTerminalView)?.inputIsConcealed = true
         if newlyConcealed { onPromptFocus?() }
-        let cellHeight = terminal.bounds.height / CGFloat(max(1, snapshot.dimensions.rows))
+        // The terminal grid leaves a partial row below it. Dividing the view's
+        // height includes that remainder and exposes the input's background.
+        let cellHeight = terminal.getOptimalFrameSize().height / CGFloat(max(1, snapshot.dimensions.rows))
         let height = terminal.bounds.height - CGFloat(row) * cellHeight
         promptCover.frame = NSRect(x: terminal.frame.minX, y: terminal.frame.minY, width: terminal.frame.width, height: height)
         promptCover.isHidden = false
@@ -1241,6 +1246,7 @@ private struct PromptBar: View {
     let isEnabled: Bool
     let onSubmit: (String, [PromptImage]) -> Bool
     let onRecover: (PromptRecovery) -> Void
+    let onTerminal: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1263,6 +1269,7 @@ private struct PromptBar: View {
             projectName: projectName,
             isBusy: session.isSendingPrompt,
             isEnabled: isEnabled,
+            onTerminal: onTerminal,
             onSubmit: onSubmit
         )
         }
@@ -1284,6 +1291,13 @@ private struct WorkspaceBar: View {
     let onHandoff: () -> Void
     let onProjectTools: () -> Void
     let showCLIInput: Binding<Bool>
+    @ObservedObject var tools: WorkspaceTools
+    let onTerminal: () -> Void
+
+    private var activityTitle: String {
+        if session.hostsConversation { return session.isWorking ? "Working" : session.acceptsPromptText ? "Ready" : "Needs input" }
+        return session.state.description
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -1303,15 +1317,14 @@ private struct WorkspaceBar: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.workingDirectory.lastPathComponent)
-                    .font(ElevateTheme.serif(compact ? 20 : 24))
+                    .font(ElevateTheme.serif(compact ? 18 : 21))
                     .foregroundStyle(ElevateTheme.ink)
                     .lineLimit(1)
                     .help(model.workingDirectory.path)
-                Text("\(session.state.description) · \(session.accountStatus)")
-                    .font(ElevateTheme.serif(11))
+                Text(session.hostsConversation ? session.displayTitle : "New conversation")
+                    .font(.system(size: 11))
                     .foregroundStyle(ElevateTheme.graphite)
                     .lineLimit(1)
-                    .help(session.accountStatus)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1349,6 +1362,52 @@ private struct WorkspaceBar: View {
             }
             .padding(.trailing, compact ? ElevateTheme.spacing8 : ElevateTheme.spacing24)
 
+            Menu {
+                Text("\(model.selected.title) · \(activityTitle)")
+                Text(session.accountStatus)
+                if session.backgroundTerminalCount > 0 {
+                    Divider()
+                    Text("\(session.backgroundTerminalCount) background terminals")
+                    Button("View terminals") {
+                        if session.sendPrompt("/ps") { onTerminal() }
+                    }
+                    .disabled(!session.acceptsPromptText || session.isSendingPrompt)
+                }
+                Divider()
+                Button("Terminal controls", action: onTerminal)
+            } label: {
+                HStack(spacing: 6) {
+                    Circle().fill(session.isWorking ? ElevateTheme.signal : ElevateTheme.graphite).frame(width: 5, height: 5)
+                    Text(activityTitle).font(.system(size: 11))
+                    if session.backgroundTerminalCount > 0 {
+                        Text("· \(session.backgroundTerminalCount)").font(.system(size: 11))
+                    }
+                }
+                .foregroundStyle(ElevateTheme.graphite)
+                .padding(.horizontal, 10)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Session activity")
+            .padding(.trailing, 8)
+
+            if tools.root(for: model.workingDirectory) != nil {
+                Menu {
+                    ForEach(WorkspaceTools.Tool.allCases, id: \.self) { tool in
+                        Button {
+                            Task { await tools.open(tool, project: model.workingDirectory) }
+                        } label: { Label(tool.title, systemImage: tool.symbol) }
+                    }
+                } label: {
+                    Image(systemName: "play.rectangle").font(.system(size: 16)).frame(width: 32, height: 36)
+                }
+                .menuStyle(.borderlessButton)
+                .disabled(tools.opening != nil)
+                .help(tools.opening.map { "Opening \($0.title)…" } ?? "Animation tools")
+                .accessibilityLabel("Animation tools")
+                .padding(.trailing, 8)
+            }
+
             Button(action: onProjectTools) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 17))
@@ -1385,6 +1444,8 @@ private struct WorkspaceBar: View {
 
             Menu {
                 Toggle("Show CLI input and status", isOn: showCLIInput)
+                Button("Focus terminal controls", action: onTerminal)
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
                 Divider()
                 Button("Log in or view login") { onLogin() }
                     .disabled(!model.isCurrentProjectAvailable)
@@ -1417,7 +1478,7 @@ private struct WorkspaceBar: View {
         .frame(height: 68)
         .background(ElevateTheme.paper)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(ElevateTheme.border).frame(height: ElevateTheme.hairlineWidth)
+            Rectangle().fill(ElevateTheme.borderSubtle).frame(height: ElevateTheme.hairlineWidth)
         }
     }
 }
@@ -1741,6 +1802,7 @@ struct HostView: View {
     @State private var promptFocusRequest = 0
     @State private var handoffDraft: HandoffDraft?
     @State private var projectToolsRequest: ProjectToolsRequest?
+    @StateObject private var tools = WorkspaceTools()
 
     init(appDelegate: PrivateCLIAppDelegate) {
         self.init(appDelegate: appDelegate, model: HostModel())
@@ -1800,13 +1862,30 @@ struct HostView: View {
                         )
                     },
                     onProjectTools: { projectToolsRequest = ProjectToolsRequest(directory: model.workingDirectory) },
-                    showCLIInput: $showCLIInput
+                    showCLIInput: $showCLIInput,
+                    tools: tools,
+                    onTerminal: focusTerminal
                 )
                 TerminalDeck(terminal: model.currentSession.terminal, agent: model.selected, hidesPrompt: !showCLIInput, onPromptFocus: { promptFocusRequest += 1 }) { images in
                     imageDrafts[taskDraftKey, default: []] += images
                     promptFocusRequest += 1
                 }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay {
+                        if model.currentSession.state == .idle, model.currentSession.pendingResumeID == nil {
+                            VStack(spacing: 12) {
+                                PixelMark(sprite: model.selected.mark, color: ElevateTheme.ash)
+                                Text("New conversation")
+                                    .font(ElevateTheme.serif(24))
+                                    .foregroundStyle(Color(nsColor: ElevateTheme.terminalForeground))
+                                Text("Write below, or choose a saved conversation.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(ElevateTheme.ash)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(nsColor: ElevateTheme.terminalBackground))
+                        }
+                    }
                 PromptBar(
                     session: model.currentSession,
                     text: taskDraft,
@@ -1821,7 +1900,8 @@ struct HostView: View {
                         imageDrafts[taskDraftKey] = recovery.images.compactMap { url in
                             NSImage(contentsOf: url).map { PromptImage(url: url, thumbnail: $0) }
                         }
-                    }
+                    },
+                    onTerminal: focusTerminal
                 )
                 .id(taskDraftKey)
 
@@ -1837,7 +1917,24 @@ struct HostView: View {
                 return true
             }
         }
-        .onChange(of: taskDraftKey) { _ in promptFocusRequest += 1 }
+        .onChange(of: taskDraftKey) { _ in
+            showCLIInput = false
+            promptFocusRequest += 1
+        }
+        .background {
+            Button("Focus message") {
+                showCLIInput = false
+                promptFocusRequest += 1
+            }
+            .keyboardShortcut("l", modifiers: .command)
+            .hidden()
+        }
+        .alert("Could not open animation tool", isPresented: Binding(
+            get: { tools.errorMessage != nil },
+            set: { if !$0 { tools.errorMessage = nil } }
+        )) {
+            Button("OK") { tools.errorMessage = nil }
+        } message: { Text(tools.errorMessage ?? "") }
         .frame(minWidth: 960, minHeight: 600)
         .background(ElevateTheme.paper)
         .sheet(item: $projectToolsRequest) { request in
@@ -1911,7 +2008,14 @@ struct HostView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             HostDiagnostics.record("app_quitting")
+            tools.stopOwnedServer()
         }
+    }
+
+    private func focusTerminal() {
+        showCLIInput = true
+        let terminal = model.currentSession.terminal
+        DispatchQueue.main.async { terminal.window?.makeFirstResponder(terminal) }
     }
 
     private func requestStopSession(_ session: TerminalSession) {
