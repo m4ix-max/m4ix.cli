@@ -18,8 +18,10 @@ signatures are for local checks only.
    and creates a ZIP and SHA-256 checksum. Existing artifacts are never replaced.
 5. Run `bash Tools/verify-packaged-app.sh "$M4IX_OUTPUT_DIR/m4ix.CLI 0.11.1.app"` against that exact packaged app.
    Both installed providers must be logged in and trust the source folder.
-6. Test the downloaded ZIP on a separate Mac with Gatekeeper enabled. Record
-   the architecture and OS tested. The package currently targets the build
+6. Test the downloaded ZIP on a separate Mac with Gatekeeper enabled.
+   Run `bash Tools/verify-release-artifact.sh <downloaded.zip>` to check the
+   checksum, extracted signature, hardened runtime, ticket, and Gatekeeper.
+   Record the architecture and OS tested. The package currently targets the build
    machine's architecture; an Apple silicon build does not certify Intel support.
 7. Commit the reviewed source and publish it to GitHub. Wait for App checks
    to pass on the release commit. Make the repository public only after the
