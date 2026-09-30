@@ -138,4 +138,19 @@ if launch_fake claude run --session-id not-a-uuid "$prompt" >/dev/null 2>&1; the
 fi
 [[ ! -e "$capture" ]]
 
+# Simulate simultaneous account checks and terminal launches on fresh profiles.
+for round in 1 2 3; do
+    profile_root="$test_root/concurrent-$round"
+    jobs=()
+    for agent in claude codex; do
+        for copy in 1 2 3 4; do
+            launch_fake "$agent" status >"$test_root/$round-$agent-$copy.log" 2>&1 &
+            jobs+=("$!")
+        done
+    done
+    for job in "${jobs[@]}"; do wait "$job"; done
+    [[ $(readlink "$profile_root/claude/CLAUDE.md") == "$test_home/.claude/CLAUDE.md" ]]
+    [[ $(readlink "$profile_root/codex/AGENTS.md") == "$test_home/.codex/AGENTS.md" ]]
+done
+
 printf 'agent-launcher prompt and profile tests passed\n'

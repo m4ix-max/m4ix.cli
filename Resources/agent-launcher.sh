@@ -95,7 +95,12 @@ else
     identity_link="$profile_dir/AGENTS.md"
 fi
 if [[ -f "$identity_source" && ! -e "$identity_link" && ! -L "$identity_link" ]]; then
-    ln -s "$identity_source" "$identity_link" || fail 'cannot link identity instructions'
+    # Account checks and terminal launches may initialize a fresh profile together.
+    # Accept a concurrent creation only when it points to the same canonical file.
+    if ! ln -s "$identity_source" "$identity_link" 2>/dev/null; then
+        [[ -L "$identity_link" && $(readlink "$identity_link") == "$identity_source" ]] ||
+            fail 'cannot link identity instructions'
+    fi
 fi
 
 # A desktop app, terminal, or prior CLI session may inject API credentials,

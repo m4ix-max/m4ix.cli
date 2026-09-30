@@ -7,7 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
 
-private enum Agent: String, CaseIterable, Identifiable, Hashable {
+enum Agent: String, CaseIterable, Identifiable, Hashable {
     case claude
     case codex
 
@@ -16,7 +16,7 @@ private enum Agent: String, CaseIterable, Identifiable, Hashable {
     var mark: PixelSprite { self == .claude ? .claude : .codex }
 }
 
-private enum TerminalAction: String {
+enum TerminalAction: String {
     case run
     case login
     case resume
@@ -24,7 +24,7 @@ private enum TerminalAction: String {
     var title: String { self == .login ? "Login" : "CLI" }
 }
 
-private enum TerminalState: Equatable {
+enum TerminalState: Equatable {
     case idle
     case running(TerminalAction)
     case stopping
@@ -60,6 +60,12 @@ enum HostPaths {
         return support.appendingPathComponent("Private CLI Host", isDirectory: true)
     }()
 
+    static let preferences: UserDefaults = {
+        if let suite = ProcessInfo.processInfo.environment["PRIVATE_CLI_HOST_PREFERENCES_SUITE"], !suite.isEmpty,
+           let defaults = UserDefaults(suiteName: suite) { return defaults }
+        return .standard
+    }()
+
     static let launcher: URL? = {
         if let url = Bundle.main.url(forResource: "agent-launcher", withExtension: "sh") { return url }
         if let url = Bundle.main.url(forResource: "agent-launcher", withExtension: "sh", subdirectory: "Resources") { return url }
@@ -73,7 +79,7 @@ enum HostPaths {
 
 /// Tracks keystrokes sent to the CLI so the heartbeat can tell a quiet
 /// session from one that stopped answering.
-private final class TrackedTerminalView: LocalProcessTerminalView {
+final class TrackedTerminalView: LocalProcessTerminalView {
     let activity = TerminalActivityClock()
     /// Hands images from ⌘V to the prompt bar. SwiftTerm pastes only text,
     /// so an image would otherwise paste as nothing.
@@ -91,8 +97,13 @@ private final class TrackedTerminalView: LocalProcessTerminalView {
     }
 }
 
+struct PromptRecovery {
+    let text: String
+    let images: [URL]
+}
+
 @MainActor
-private final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProcessTerminalViewDelegate {
+final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProcessTerminalViewDelegate {
     let id = UUID()
     let agent: Agent
     let projectPath: String
@@ -122,16 +133,17 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
     private var oscObservation: TerminalOscObservation?
     private var queuedPrompt: (text: String, images: [URL])?
     @Published private(set) var isSendingPrompt = false
+    @Published private(set) var promptRecovery: PromptRecovery?
     private var promptTask: Task<Void, Never>?
 
     init(agent: Agent, projectPath: String, title: String, initialPrompt: String? = nil,
-         pendingResumeID: String? = nil) {
+         pendingResumeID: String? = nil, profileBase: URL = HostPaths.profileBase) {
         self.agent = agent
         self.projectPath = projectPath
         self.displayTitle = title
         self.initialPrompt = initialPrompt
         self.pendingResumeID = pendingResumeID?.lowercased()
-        self.profileDirectory = HostPaths.profileBase.appendingPathComponent(agent.rawValue, isDirectory: true)
+        self.profileDirectory = profileBase.appendingPathComponent(agent.rawValue, isDirectory: true)
         self.terminal = TrackedTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 520))
         super.init()
 
@@ -220,6 +232,8 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
 
     /// Types `text` and any images into the CLI's prompt, then submits it.
     /// Sends nothing and returns false while a menu or dialog holds the screen.
+    func clearPromptRecovery() { promptRecovery = nil }
+
     func sendPrompt(_ text: String, images: [URL] = []) -> Bool {
         let ready = screenAcceptsText()
         if acceptsPromptText != ready { acceptsPromptText = ready }
@@ -229,15 +243,21 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
         promptTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.isSendingPrompt = false; self.promptTask = nil }
-            await self.type(text, images: images, bracketed: bracketed)
+            if await self.type(text, images: images, bracketed: bracketed) {
+                self.promptRecovery = nil
+            } else {
+                self.promptRecovery = PromptRecovery(text: text, images: images)
+                HostDiagnostics.record("prompt_delivery_interrupted", agent: self.agent.rawValue, session: self.id)
+            }
         }
         return true
     }
 
     /// Attaches the images, then types the text. Return goes last, and only
     /// onto the input line.
-    private func type(_ text: String, images: [URL], bracketed: Bool) async {
-        guard await attach(images, bracketed: bracketed) else { return }
+    private func type(_ text: String, images: [URL], bracketed: Bool) async -> Bool {
+        guard !Task.isCancelled, screenAcceptsText(), await attach(images, bracketed: bracketed) else { return false }
+        guard !Task.isCancelled, screenAcceptsText() else { return false }
         // Claude does not space text away from the last image marker.
         if !text.isEmpty {
             let body = images.isEmpty ? text : " " + text
@@ -245,8 +265,9 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
         }
         try? await Task.sleep(nanoseconds: UInt64(CLIPrompt.returnDelay * 1_000_000_000))
         // A dialog can open in the gap; Return would answer it.
-        guard !Task.isCancelled, screenAcceptsText() else { return }
+        guard !Task.isCancelled, screenAcceptsText() else { return false }
         terminal.send(data: [0x0d][...])
+        return true
     }
 
     /// Pastes each image path and waits for the CLI to attach it before the
@@ -295,6 +316,7 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
     func stop() {
         guard case .running = state else { return }
         promptTask?.cancel()
+        if let queuedPrompt { promptRecovery = PromptRecovery(text: queuedPrompt.text, images: queuedPrompt.images) }
         queuedPrompt = nil
         HostDiagnostics.record("session_stop_requested", agent: agent.rawValue, session: id)
         state = .stopping
@@ -339,7 +361,7 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
         }
 
         var environment = ProcessInfo.processInfo.environment
-        environment["PRIVATE_CLI_HOST_DATA_DIR"] = HostPaths.profileBase.path
+        environment["PRIVATE_CLI_HOST_DATA_DIR"] = profileDirectory.deletingLastPathComponent().path
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         launchedDirectory = directory
@@ -372,41 +394,24 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
         let generation = accountStatusGeneration
         accountStatus = "Checking account"
         let agentName = agent.rawValue
-        let profileBasePath = HostPaths.profileBase.path
+        let profileBasePath = profileDirectory.deletingLastPathComponent().path
         let workingPath = directory.path
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = [launcher.path, agentName, "status"]
-            process.currentDirectoryURL = URL(fileURLWithPath: workingPath, isDirectory: true)
             var environment = ProcessInfo.processInfo.environment
             environment["PRIVATE_CLI_HOST_DATA_DIR"] = profileBasePath
-            process.environment = environment
-            process.standardOutput = output
-            process.standardError = output
-            let finished = DispatchSemaphore(value: 0)
-            process.terminationHandler = { _ in finished.signal() }
-
             let status: String
             do {
-                try process.run()
-                if finished.wait(timeout: .now() + 8) == .timedOut {
-                    if process.isRunning { process.terminate() }
-                    if finished.wait(timeout: .now() + 2) == .timedOut && process.isRunning {
-                        _ = Darwin.kill(process.processIdentifier, SIGKILL)
-                    }
-                    status = "Account check timed out"
-                } else {
-                    let data = output.fileHandleForReading.readDataToEndOfFile()
-                    let lines = String(decoding: data, as: UTF8.self)
-                        .components(separatedBy: .newlines)
-                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                        .filter { !$0.isEmpty }
-                    let summary = lines.prefix(2).joined(separator: " · ")
-                    status = summary.isEmpty ? (process.terminationStatus == 0 ? "Account ready" : "Account unavailable") : String(summary.prefix(180))
-                }
+                let result = try CommandRunner.run(executable: "/bin/bash",
+                    arguments: [launcher.path, agentName, "status"],
+                    directory: URL(fileURLWithPath: workingPath, isDirectory: true),
+                    environment: environment, timeout: 8, outputLimit: 4096)
+                let summary = result.output.components(separatedBy: .newlines)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }.prefix(2).joined(separator: " · ")
+                status = summary.isEmpty ? (result.status == 0 ? "Account ready" : "Account unavailable") : String(summary.prefix(180))
+            } catch CommandError.timedOut {
+                status = "Account check timed out"
             } catch {
                 status = "Could not check account"
             }
@@ -429,7 +434,7 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
             )
             NSWorkspace.shared.open(profileDirectory)
         } catch {
-            state = .failed("Could not open profile: \(error.localizedDescription)")
+            accountStatus = "Could not open profile: \(error.localizedDescription)"
         }
     }
 
@@ -447,6 +452,7 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
         HostDiagnostics.record("session_exited", agent: agent.rawValue, session: id, exitCode: exitCode)
         state = .exited(exitCode)
         promptTask?.cancel()
+        if let queuedPrompt { promptRecovery = PromptRecovery(text: queuedPrompt.text, images: queuedPrompt.images) }
         queuedPrompt = nil
         acceptsPromptText = false
         turns.reset()
@@ -461,7 +467,7 @@ private final class TerminalSession: NSObject, ObservableObject, Identifiable, L
     }
 }
 
-private struct ProjectRecord: Identifiable, Hashable {
+struct ProjectRecord: Identifiable, Hashable {
     let path: String
 
     var id: String { path }
@@ -474,14 +480,17 @@ private struct ProjectRecord: Identifiable, Hashable {
 }
 
 @MainActor
-private final class ProjectWorkspace {
+final class ProjectWorkspace {
     private var standby: [Agent: TerminalSession]
     private var live: [Agent: [TerminalSession]] = [:]
     private var selectedSessionIDs: [Agent: UUID] = [:]
 
-    init(projectPath: String) {
+    private let profileBase: URL
+
+    init(projectPath: String, profileBase: URL = HostPaths.profileBase) {
+        self.profileBase = profileBase
         standby = Dictionary(uniqueKeysWithValues: Agent.allCases.map { agent in
-            (agent, TerminalSession(agent: agent, projectPath: projectPath, title: "Account"))
+            (agent, TerminalSession(agent: agent, projectPath: projectPath, title: "Account", profileBase: profileBase))
         })
     }
 
@@ -500,7 +509,7 @@ private final class ProjectWorkspace {
     func sessionForLogin(for agent: Agent) -> TerminalSession {
         let current = standbySession(for: agent)
         if current.state == .idle || current.state.isRunning { return current }
-        let replacement = TerminalSession(agent: agent, projectPath: current.projectPath, title: "Account")
+        let replacement = TerminalSession(agent: agent, projectPath: current.projectPath, title: "Account", profileBase: profileBase)
         standby[agent] = replacement
         return replacement
     }
@@ -524,7 +533,7 @@ private final class ProjectWorkspace {
     @discardableResult
     func createConversation(for agent: Agent, title: String, initialPrompt: String? = nil) -> TerminalSession {
         let session = TerminalSession(agent: agent, projectPath: standbySession(for: agent).projectPath,
-                                      title: title, initialPrompt: initialPrompt)
+                                      title: title, initialPrompt: initialPrompt, profileBase: profileBase)
         live[agent, default: []].insert(session, at: 0)
         selectedSessionIDs[agent] = session.id
         return session
@@ -533,7 +542,7 @@ private final class ProjectWorkspace {
     func restoreConversation(for agent: Agent, title: String, conversationID: String, selected: Bool) {
         guard liveSession(for: agent, conversationID: conversationID) == nil else { return }
         let session = TerminalSession(agent: agent, projectPath: standbySession(for: agent).projectPath,
-                                      title: title, pendingResumeID: conversationID)
+                                      title: title, pendingResumeID: conversationID, profileBase: profileBase)
         live[agent, default: []].append(session)
         if selected { selectedSessionIDs[agent] = session.id }
     }
@@ -590,7 +599,7 @@ private final class ProjectWorkspace {
 }
 
 @MainActor
-private final class HostModel: ObservableObject {
+final class HostModel: ObservableObject {
     @Published var selected: Agent = .claude
     @Published private(set) var workingDirectory: URL
     @Published private(set) var projects: [ProjectRecord]
@@ -605,17 +614,24 @@ private final class HostModel: ObservableObject {
     private var workspaces: [String: ProjectWorkspace] = [:]
     private var savedProjectPaths: [String]
     private var hiddenProjectPaths: Set<String>
+    private let historyCache = ConversationHistoryCache()
     private var historyRefreshInFlight = false
     private var historyRefreshPending = false
     private var historyLoaded = false
+    private var isShuttingDown = false
 
     private static let directoryPreferenceKey = "PrivateCLIHostWorkingDirectory"
     private static let projectsPreferenceKey = "PrivateCLIHostProjects"
     private static let hiddenProjectsPreferenceKey = "PrivateCLIHostHiddenProjects"
     private static let restorableSessionsPreferenceKey = "PrivateCLIHostRestorableSessions"
 
-    init() {
-        let defaults = UserDefaults.standard
+    private let preferences: UserDefaults
+    private let profileBase: URL
+
+    init(defaults: UserDefaults? = nil, profileBase: URL = HostPaths.profileBase) {
+        let defaults = defaults ?? HostPaths.preferences
+        self.preferences = defaults
+        self.profileBase = profileBase
         let previousSelection = defaults.string(forKey: Self.directoryPreferenceKey).map(Self.normalizedPath)
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
         let rawSaved = defaults.stringArray(forKey: Self.projectsPreferenceKey) ?? [previousSelection ?? home]
@@ -627,8 +643,10 @@ private final class HostModel: ObservableObject {
         self.hiddenProjectPaths = Set(defaults.stringArray(forKey: Self.hiddenProjectsPreferenceKey) ?? [])
         self.workingDirectory = URL(fileURLWithPath: initialPath, isDirectory: true)
         self.projects = self.savedProjectPaths.map(ProjectRecord.init(path:))
-        self.workspaces[initialPath] = ProjectWorkspace(projectPath: initialPath)
+        self.workspaces[initialPath] = ProjectWorkspace(projectPath: initialPath, profileBase: profileBase)
     }
+
+    deinit { periodicTimers.forEach { $0.invalidate() } }
 
     private static func normalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
@@ -638,7 +656,7 @@ private final class HostModel: ObservableObject {
 
     private func workspace(for path: String) -> ProjectWorkspace {
         if let workspace = workspaces[path] { return workspace }
-        let workspace = ProjectWorkspace(projectPath: path)
+        let workspace = ProjectWorkspace(projectPath: path, profileBase: profileBase)
         workspaces[path] = workspace
         return workspace
     }
@@ -648,7 +666,7 @@ private final class HostModel: ObservableObject {
     var isCurrentProjectAvailable: Bool { ProjectRecord(path: workingDirectory.path).isAvailable }
 
     func liveSessionsForCurrentProject() -> [TerminalSession] {
-        currentWorkspace.liveSessions(for: selected)
+        currentWorkspace.allLiveSessions.sorted { $0.startedAt > $1.startedAt }
     }
 
     func isSelected(_ session: TerminalSession) -> Bool {
@@ -656,21 +674,22 @@ private final class HostModel: ObservableObject {
     }
 
     func selectLiveSession(_ session: TerminalSession) {
-        guard currentWorkspace.select(session, for: selected) else { return }
+        guard currentWorkspace.select(session, for: session.agent) else { return }
+        selected = session.agent
         sessionRevision += 1
     }
 
     /// Starts the shown session if it was restored from the previous launch.
     /// Restored sessions in other projects wait until they are shown.
     func startCurrentIfPending() {
-        guard isCurrentProjectAvailable else { return }
+        guard !isShuttingDown, isCurrentProjectAvailable else { return }
         currentSession.startIfPending()
     }
 
     /// Saves live conversations that exist in history, so a quit or a crash
     /// can be picked up where it stopped. Stopped sessions are not kept.
     func saveRestorableSessions() {
-        guard historyLoaded else { return }
+        guard historyLoaded, !isShuttingDown else { return }
         let known = Set(conversations.map { "\($0.provider):\($0.sessionID.lowercased())" })
         var entries: [[String: Any]] = []
         for (path, workspace) in workspaces {
@@ -688,11 +707,11 @@ private final class HostModel: ObservableObject {
                 }
             }
         }
-        UserDefaults.standard.set(entries, forKey: Self.restorableSessionsPreferenceKey)
+        preferences.set(entries, forKey: Self.restorableSessionsPreferenceKey)
     }
 
     func restoreSessions() {
-        let entries = UserDefaults.standard.array(forKey: Self.restorableSessionsPreferenceKey) as? [[String: Any]] ?? []
+        let entries = preferences.array(forKey: Self.restorableSessionsPreferenceKey) as? [[String: Any]] ?? []
         var restored = 0
         for entry in entries {
             guard let path = entry["project"] as? String,
@@ -848,7 +867,7 @@ private final class HostModel: ObservableObject {
 
     @discardableResult
     func startNewConversation(initialPrompt: String? = nil, images: [URL] = []) -> Bool {
-        guard isCurrentProjectAvailable, HostPaths.launcher != nil else { return false }
+        guard !isShuttingDown, isCurrentProjectAvailable, HostPaths.launcher != nil else { return false }
         let firstLine = initialPrompt?
             .components(separatedBy: .newlines)
             .first?
@@ -871,8 +890,37 @@ private final class HostModel: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func startHandoff(_ draft: HandoffDraft, prompt: String, store: ProjectContextStore = .shared) async throws -> TerminalSession {
+        guard workingDirectory.path == draft.projectPath else {
+            throw CommandError.failed("The selected project changed. Open a new handoff in the intended project.")
+        }
+        let context = try await store.load(path: draft.projectPath)
+        let fullPrompt = context.brief.isEmpty ? prompt : prompt + "\n\nShared project brief:\n" + context.brief
+        let record = ProjectHandoffRecord(id: UUID(), date: Date(), source: draft.source,
+                           target: draft.target, prompt: fullPrompt, state: "Prepared")
+        try await store.appendHandoff(path: draft.projectPath, record: record)
+        guard workingDirectory.path == draft.projectPath else {
+            try await store.updateHandoff(path: draft.projectPath, id: record.id, state: "Cancelled: project changed")
+            throw CommandError.failed("The project changed while preparing the handoff. No conversation was started.")
+        }
+        let previous = selected
+        selected = draft.target == "Codex" ? .codex : .claude
+        guard startNewConversation(initialPrompt: fullPrompt) else {
+            selected = previous
+            try await store.updateHandoff(path: draft.projectPath, id: record.id, state: "Launch failed")
+            throw CommandError.failed("Could not start the conversation. Check the project folder and launcher.")
+        }
+        do {
+            try await store.updateHandoff(path: draft.projectPath, id: record.id, state: "Launch requested")
+        } catch {
+            HostDiagnostics.record("handoff_status_save_failed")
+        }
+        return currentSession
+    }
+
     func openConversation(_ record: ConversationRecord) {
-        guard isCurrentProjectAvailable,
+        guard !isShuttingDown, isCurrentProjectAvailable,
               record.provider == selected.rawValue,
               record.projectPath == workingDirectory.path else { return }
         currentWorkspace.reconcileHistory(conversations)
@@ -896,7 +944,7 @@ private final class HostModel: ObservableObject {
     }
 
     func showLogin() {
-        guard isCurrentProjectAvailable else { return }
+        guard !isShuttingDown, isCurrentProjectAvailable else { return }
         let session = currentWorkspace.sessionForLogin(for: selected)
         currentWorkspace.selectStandby(for: selected)
         sessionRevision += 1
@@ -906,16 +954,24 @@ private final class HostModel: ObservableObject {
     }
 
     func stopLiveSession(_ session: TerminalSession) {
-        guard currentWorkspace.liveSessions(for: selected).contains(where: { $0.id == session.id }) else { return }
+        guard currentWorkspace.liveSessions(for: session.agent).contains(where: { $0.id == session.id }) else { return }
         session.stop()
     }
 
     func removeLiveSession(_ session: TerminalSession) {
-        if currentWorkspace.remove(session, for: selected) {
+        if currentWorkspace.remove(session, for: session.agent) {
             clearAttention(for: session.id)
             sessionRevision += 1
             saveRestorableSessions()
         }
+    }
+
+    func prepareForTermination() {
+        guard !isShuttingDown else { return }
+        saveRestorableSessions()
+        isShuttingDown = true
+        periodicTimers.forEach { $0.invalidate() }
+        periodicTimers.removeAll()
     }
 
     func stopAllSessions() {
@@ -956,7 +1012,16 @@ private final class HostModel: ObservableObject {
             rebuildProjects()
         }
         workingDirectory = project.url
-        UserDefaults.standard.set(project.path, forKey: Self.directoryPreferenceKey)
+        preferences.set(project.path, forKey: Self.directoryPreferenceKey)
+    }
+
+    func openWorkspace(_ directory: URL) {
+        let path = Self.normalizedPath(directory.path)
+        if !savedProjectPaths.contains(path) { savedProjectPaths.append(path) }
+        hiddenProjectPaths.remove(path)
+        saveProjectPreferences()
+        rebuildProjects()
+        selectProject(ProjectRecord(path: path))
     }
 
     func addProject() {
@@ -1009,9 +1074,10 @@ private final class HostModel: ObservableObject {
             return
         }
         historyRefreshInFlight = true
-        let profileBase = HostPaths.profileBase
+        let profileBase = self.profileBase
+        let cache = historyCache
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let records = ConversationHistoryLoader.load(profileBase: profileBase)
+            let records = ConversationHistoryLoader.load(profileBase: profileBase, cache: cache)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.historyRefreshInFlight = false
@@ -1044,8 +1110,8 @@ private final class HostModel: ObservableObject {
     }
 
     private func saveProjectPreferences() {
-        UserDefaults.standard.set(savedProjectPaths, forKey: Self.projectsPreferenceKey)
-        UserDefaults.standard.set(Array(hiddenProjectPaths), forKey: Self.hiddenProjectsPreferenceKey)
+        preferences.set(savedProjectPaths, forKey: Self.projectsPreferenceKey)
+        preferences.set(Array(hiddenProjectPaths), forKey: Self.hiddenProjectsPreferenceKey)
     }
 }
 
@@ -1118,8 +1184,20 @@ private struct PromptBar: View {
     let projectName: String
     let isEnabled: Bool
     let onSubmit: (String, [PromptImage]) -> Bool
+    let onRecover: (PromptRecovery) -> Void
 
     var body: some View {
+        VStack(spacing: 0) {
+            if let recovery = session.promptRecovery {
+                HStack {
+                    Text("Prompt delivery was interrupted. Check the terminal before resending.")
+                        .font(.callout).foregroundStyle(ElevateTheme.ink)
+                    Spacer()
+                    Button("Restore draft") { onRecover(recovery); session.clearPromptRecovery() }
+                    Button("Dismiss") { session.clearPromptRecovery() }
+                }
+                .padding(12).background(ElevateTheme.paperDeep)
+            }
         PromptComposer(
             text: text,
             images: images,
@@ -1127,14 +1205,16 @@ private struct PromptBar: View {
             mode: mode,
             agentName: agentName,
             projectName: projectName,
+            isBusy: session.isSendingPrompt,
             isEnabled: isEnabled,
             onSubmit: onSubmit
         )
+        }
     }
 
     private var mode: PromptComposer.Mode {
         guard session.hostsConversation else { return .start }
-        return session.acceptsPromptText && !session.isSendingPrompt ? .send : .blocked
+        return session.acceptsPromptText ? .send : .blocked
     }
 }
 
@@ -1146,8 +1226,11 @@ private struct WorkspaceBar: View {
     let onNewConversation: () -> Void
     let onLogin: () -> Void
     let onHandoff: () -> Void
+    let onProjectTools: () -> Void
 
     var body: some View {
+        GeometryReader { geometry in
+            let compact = geometry.size.width < 850
         HStack(alignment: .center, spacing: 0) {
             Button(action: onToggleSidebar) {
                 Image(systemName: "sidebar.left")
@@ -1167,7 +1250,7 @@ private struct WorkspaceBar: View {
                     .tracking(0.3)
                     .foregroundStyle(ElevateTheme.graphite)
                 Text(model.workingDirectory.lastPathComponent)
-                    .font(ElevateTheme.serif(24))
+                    .font(ElevateTheme.serif(compact ? 20 : 24))
                     .foregroundStyle(ElevateTheme.ink)
                     .lineLimit(1)
                     .help(model.workingDirectory.path)
@@ -1186,6 +1269,8 @@ private struct WorkspaceBar: View {
                         HStack(spacing: ElevateTheme.spacing8) {
                             PixelMark(sprite: agent.mark, color: tint)
                             Text(agent.title.uppercased())
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .font(ElevateTheme.utility(12, medium: true))
                                 .foregroundStyle(tint)
                             if model.selected != agent,
@@ -1209,14 +1294,30 @@ private struct WorkspaceBar: View {
                     .accessibilityAddTraits(model.selected == agent ? [.isSelected] : [])
                 }
             }
-            .padding(.trailing, ElevateTheme.spacing24)
+            .padding(.trailing, compact ? ElevateTheme.spacing8 : ElevateTheme.spacing24)
+
+            Button(action: onProjectTools) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 17))
+                    .foregroundStyle(ElevateTheme.ink)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .help("Project brief, tasks, and Git workspaces")
+            .accessibilityLabel("Project tools")
+            .disabled(!model.isCurrentProjectAvailable)
+            .padding(.trailing, ElevateTheme.spacing8)
 
             Button(action: onNewConversation) {
                 HStack(spacing: 9) {
                     Image(systemName: "plus")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("NEW CONVERSATION")
-                        .font(ElevateTheme.utility(11, medium: true))
+                    if !compact {
+                        Text("NEW CONVERSATION")
+                            .font(ElevateTheme.utility(11, medium: true))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
                 .foregroundStyle(ElevateTheme.onSignal)
                 .padding(.horizontal, ElevateTheme.spacing16)
@@ -1238,6 +1339,7 @@ private struct WorkspaceBar: View {
                         : FileManager.default.homeDirectoryForCurrentUser)
                 }
                 Divider()
+                Button("Project brief, tasks, and workspaces…", action: onProjectTools)
                 Button("Hand off to \(model.selected == .claude ? "Codex" : "Claude")…", action: onHandoff)
                     .disabled(!session.hostsConversation)
                 Divider()
@@ -1254,7 +1356,9 @@ private struct WorkspaceBar: View {
             .accessibilityLabel("More session actions")
             .help("Session actions")
         }
+        .frame(height: 84)
         .padding(.horizontal, ElevateTheme.spacing24)
+        }
         .frame(height: 84)
         .background(ElevateTheme.paper)
         .overlay(alignment: .bottom) {
@@ -1280,10 +1384,10 @@ private struct ProjectSidebar: View {
 
     private var visibleConversations: [ConversationRecord] {
         let runningIDs = Set(model.liveSessionsForCurrentProject().compactMap { session in
-            session.restorableConversationID?.lowercased()
+            session.restorableConversationID.map { session.agent.rawValue + ":" + $0.lowercased() }
         })
         let records = model.conversationsForCurrentProject()
-            .filter { !runningIDs.contains($0.sessionID.lowercased()) }
+            .filter { !runningIDs.contains($0.id.lowercased()) }
         guard !searchText.isEmpty else { return records }
         return records.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
     }
@@ -1503,7 +1607,7 @@ private struct LiveConversationRow: View {
         if session.pendingResumeID != nil { return "RESTORED · SELECT TO RESUME" }
         if attentionMessage != nil { return "YOUR TURN" }
         guard case .running = session.state else { return session.state.description.uppercased() }
-        return session.isWorking ? "WORKING" : "READY"
+        return session.isWorking ? "WORKING" : "WAITING"
     }
 
     @ObservedObject var session: TerminalSession
@@ -1524,7 +1628,7 @@ private struct LiveConversationRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 6) {
                     if attentionMessage != nil { AttentionPixel() }
-                    Text(status)
+                    Text("\(session.agent.title.uppercased()) · \(status)")
                         .font(ElevateTheme.utility(10, medium: attentionMessage != nil))
                         .tracking(0.3)
                         .foregroundStyle(attentionMessage != nil ? ElevateTheme.ink : ElevateTheme.graphite)
@@ -1545,7 +1649,7 @@ private struct LiveConversationRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(session.displayTitle), \(status.capitalized)")
+        .accessibilityLabel("\(session.agent.title), \(session.displayTitle), \(status.capitalized)")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .contextMenu {
             if case .running = session.state {
@@ -1566,9 +1670,10 @@ private struct LiveConversationRow: View {
     }
 }
 
-private struct HostView: View {
+@MainActor
+struct HostView: View {
     let appDelegate: PrivateCLIAppDelegate
-    @StateObject private var model = HostModel()
+    @StateObject private var model: HostModel
     @State private var hasStarted = false
     @State private var sidebarVisible = true
     @State private var showingStopConfirmation = false
@@ -1579,6 +1684,16 @@ private struct HostView: View {
     @State private var imageDrafts: [String: [PromptImage]] = [:]
     @State private var promptFocusRequest = 0
     @State private var handoffDraft: HandoffDraft?
+    @State private var projectToolsRequest: ProjectToolsRequest?
+
+    init(appDelegate: PrivateCLIAppDelegate) {
+        self.init(appDelegate: appDelegate, model: HostModel())
+    }
+
+    init(appDelegate: PrivateCLIAppDelegate, model: HostModel) {
+        self.appDelegate = appDelegate
+        _model = StateObject(wrappedValue: model)
+    }
 
     private var taskDraftKey: String {
         "\(model.workingDirectory.path):\(model.selected.rawValue):\(model.currentSession.id)"
@@ -1627,7 +1742,8 @@ private struct HostView: View {
                             projectPath: model.workingDirectory.path,
                             context: CLIPrompt.liveScreen(of: session.terminal).joined(separator: "\n")
                         )
-                    }
+                    },
+                    onProjectTools: { projectToolsRequest = ProjectToolsRequest(directory: model.workingDirectory) }
                 )
                 TerminalDeck(terminal: model.currentSession.terminal) { images in
                     imageDrafts[taskDraftKey, default: []] += images
@@ -1642,7 +1758,13 @@ private struct HostView: View {
                     agentName: model.selected.title,
                     projectName: model.workingDirectory.lastPathComponent,
                     isEnabled: model.isCurrentProjectAvailable,
-                    onSubmit: { model.submitPrompt($0, images: $1.map(\.url)) }
+                    onSubmit: { model.submitPrompt($0, images: $1.map(\.url)) },
+                    onRecover: { recovery in
+                        taskDrafts[taskDraftKey] = recovery.text
+                        imageDrafts[taskDraftKey] = recovery.images.compactMap { url in
+                            NSImage(contentsOf: url).map { PromptImage(url: url, thumbnail: $0) }
+                        }
+                    }
                 )
                 .id(taskDraftKey)
             }
@@ -1656,16 +1778,22 @@ private struct HostView: View {
         }
         .frame(minWidth: 960, minHeight: 600)
         .background(ElevateTheme.paper)
-        .sheet(item: $handoffDraft) { draft in
-            HandoffView(draft: draft) { prompt in
-                guard model.workingDirectory.path == draft.projectPath else { return false }
+        .sheet(item: $projectToolsRequest) { request in
+            let directory = request.directory
+            ProjectToolsView(directory: directory, onOpenWorkspace: model.openWorkspace) { owner, prompt in
+                guard model.workingDirectory == directory else { return false }
                 let previous = model.selected
-                model.selected = draft.target == "Codex" ? .codex : .claude
+                model.selected = owner == "Claude" ? .claude : .codex
                 guard model.startNewConversation(initialPrompt: prompt) else {
                     model.selected = previous
                     return false
                 }
                 return true
+            }
+        }
+        .sheet(item: $handoffDraft) { draft in
+            HandoffView(draft: draft) { prompt in
+                _ = try await model.startHandoff(draft, prompt: prompt)
             }
         }
         .alert("Stop this session?", isPresented: $showingStopConfirmation) {
@@ -1697,6 +1825,9 @@ private struct HostView: View {
             model.refreshCurrentAccountStatus()
             model.refreshHistory()
             model.startPeriodicWork()
+            if let report = ProcessInfo.processInfo.environment["M4IX_PACKAGED_SMOKE_REPORT"] {
+                Task { await PackagedSmoke.run(model: model, report: URL(fileURLWithPath: report)) }
+            }
             DispatchQueue.global(qos: .utility).async { PromptImageStore.prune() }
         }
         .onChange(of: model.sessionRevision) { _ in
@@ -1737,7 +1868,7 @@ private struct HostView: View {
 }
 
 @MainActor
-private final class PrivateCLIAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class PrivateCLIAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var model: HostModel?
     private var terminationPending = false
 
@@ -1760,7 +1891,7 @@ private final class PrivateCLIAppDelegate: NSObject, NSApplicationDelegate, UNUs
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if terminationPending { return .terminateLater }
-        model?.saveRestorableSessions()
+        model?.prepareForTermination()
         guard let model, model.hasRunningSessions else { return .terminateNow }
         terminationPending = true
         model.stopAllSessions()

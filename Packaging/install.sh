@@ -1,7 +1,7 @@
 #!/bin/bash
 # Installs a packaged build as /Applications/m4ix.CLI.app, replacing the one
 # there. Takes the build's .app path; without one, the newest in outputs/.
-# build-and-package.sh runs this after each build. Run it by hand to go back
+# build-and-package.sh --install runs this after packaging. Run it by hand to go back
 # to an earlier build.
 
 set -euo pipefail

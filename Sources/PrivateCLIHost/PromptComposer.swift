@@ -64,7 +64,7 @@ struct PromptComposer: View {
     private var heading: String { mode == .start ? "NEW CONVERSATION" : "PROMPT" }
 
     private var keyHint: String {
-        mode == .blocked ? "ANSWER THE TERMINAL FIRST" : "RETURN TO SEND  /  ⇧ RETURN NEW LINE"
+        isBusy ? "SENDING PROMPT" : mode == .blocked ? "ANSWER THE TERMINAL FIRST" : "RETURN TO SEND  /  ⇧ RETURN NEW LINE"
     }
 
     private var placeholder: String {
@@ -72,7 +72,7 @@ struct PromptComposer: View {
     }
 
     private var buttonTitle: String {
-        if isBusy { return "STARTING…" }
+        if isBusy { return mode == .start ? "STARTING…" : "SENDING…" }
         return mode == .start ? "START" : "SEND"
     }
 

@@ -71,7 +71,8 @@ struct TurnDetector {
 @MainActor
 enum AttentionNotifier {
     private static var isBundled: Bool {
-        Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
+        ProcessInfo.processInfo.environment["M4IX_PACKAGED_SMOKE_REPORT"] == nil &&
+            Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
     }
 
     static func install(delegate: UNUserNotificationCenterDelegate) {
@@ -94,7 +95,7 @@ enum AttentionNotifier {
             content.body = body
             content.sound = .default
             content.userInfo = ["hostSession": identifier]
-            center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
         }
     }
 

@@ -19,5 +19,12 @@ jobs:
         run: swift test --disable-sandbox
       - name: Launcher isolation tests
         run: bash Tests/Launcher/agent-launcher-test.sh
-      - name: Release build
-        run: swift build --disable-sandbox -c release
+      - name: Package without installing
+        run: bash Packaging/build-and-package.sh
+      - name: Upload packaged app
+        uses: actions/upload-artifact@v4
+        with:
+          name: m4ix-cli-macos
+          path: outputs/*.zip
+          if-no-files-found: error
+          retention-days: 14

@@ -100,6 +100,15 @@ final class CLIPromptTests: XCTestCase {
         XCTAssertFalse(CLIPrompt.claudeAcceptsText(screen: screen))
     }
 
+    func testSkippedBlankCellInsideImageMarkerIsNormalized() {
+        let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+        // Claude can leave the space cell untouched while drawing its marker.
+        view.feed(text: "[Image\u{1b}[C#1]")
+        let screen = CLIPrompt.liveScreen(of: view)
+        XCTAssertEqual(CLIPrompt.imageMarkers(in: screen), 1)
+        XCTAssertFalse(screen.joined().contains("\u{0}"))
+    }
+
     func testPasteIsBracketedAndStripsControls() {
         let bracketed = CLIPrompt.pasteBytes("one\ntwo\u{1b}[31m\tthree", bracketed: true)
         XCTAssertEqual(String(decoding: bracketed, as: UTF8.self), "\u{1b}[200~one\ntwo [31m\tthree\u{1b}[201~")

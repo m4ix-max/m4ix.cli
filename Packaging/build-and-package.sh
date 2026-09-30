@@ -7,7 +7,15 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 OUTPUT_DIR="$PROJECT_DIR/outputs"
 APP_NAME='m4ix.CLI'
-APP_VERSION='0.9.2'
+source "$SCRIPT_DIR/version.env"
+INSTALL_BUILD=false
+case "${1:-}" in
+    --install) INSTALL_BUILD=true ;;
+    --help) printf 'Usage: bash Packaging/build-and-package.sh [--install]\n'; exit 0 ;;
+    '') ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; exit 1 ;;
+esac
+[[ $# -le 1 ]] || { printf 'Too many arguments\n' >&2; exit 1; }
 EXECUTABLE='PrivateCLIHost'
 APP_PATH="$OUTPUT_DIR/$APP_NAME $APP_VERSION.app"
 ZIP_PATH="$OUTPUT_DIR/$APP_NAME $APP_VERSION.zip"
@@ -80,14 +88,17 @@ cat > "$STAGED_APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>m4ix.CLI</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.9.2</string>
-    <key>CFBundleVersion</key><string>13</string>
+    <key>CFBundleShortVersionString</key><string>VERSION</string>
+    <key>CFBundleVersion</key><string>BUILD</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
 PLIST
+
+plutil -replace CFBundleShortVersionString -string "$APP_VERSION" "$STAGED_APP/Contents/Info.plist"
+plutil -replace CFBundleVersion -string "$APP_BUILD" "$STAGED_APP/Contents/Info.plist"
 
 ICONSET="$STAGING_DIR/AppIcon.iconset"
 mkdir -p "$ICONSET"
@@ -124,4 +135,8 @@ mv "$STAGED_ZIP" "$ZIP_PATH"
 
 printf 'App: %s\nArchive: %s\n' "$APP_PATH" "$ZIP_PATH"
 
-"$SCRIPT_DIR/install.sh" "$APP_PATH"
+if [[ "$INSTALL_BUILD" == true ]]; then
+    "$SCRIPT_DIR/install.sh" "$APP_PATH"
+else
+    printf 'To install: bash Packaging/install.sh "%s"\n' "$APP_PATH"
+fi

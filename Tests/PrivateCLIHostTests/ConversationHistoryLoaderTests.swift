@@ -65,6 +65,36 @@ final class ConversationHistoryLoaderTests: XCTestCase {
         }
     }
 
+    func testStreamingHistorySkipsOversizedRowsAndPreservesFollowingRecords() throws {
+        let root = try temporaryProfile()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let claude = root.appendingPathComponent("claude")
+        try FileManager.default.createDirectory(at: claude, withIntermediateDirectories: true)
+        let id = UUID().uuidString.lowercased()
+        let history = String(repeating: "x", count: 1_100_000) + "\n" +
+            "{\"sessionId\":\"\(id)\",\"timestamp\":1000,\"project\":\"/tmp/project\",\"display\":\"Valid after oversized line\"}"
+        try Data(history.utf8).write(to: claude.appendingPathComponent("history.jsonl"))
+        let records = ConversationHistoryLoader.load(profileBase: root)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.sessionID, id)
+    }
+
+    func testClaudeCacheInvalidatesWhenHistoryIsReplaced() throws {
+        let root = try temporaryProfile()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("history.jsonl")
+        try Data("a".utf8).write(to: file)
+        let cache = ConversationHistoryCache()
+        var reads = 0
+        let loader: () -> [ConversationRecord] = { reads += 1; return [] }
+        _ = cache.claude(profile: root, loader: loader)
+        _ = cache.claude(profile: root, loader: loader)
+        XCTAssertEqual(reads, 1)
+        try Data("b".utf8).write(to: file, options: .atomic)
+        _ = cache.claude(profile: root, loader: loader)
+        XCTAssertEqual(reads, 2)
+    }
+
     func testCodexRolloutFallbackUsesIndexAndSkipsSubagents() throws {
         let root = try temporaryProfile()
         defer { try? FileManager.default.removeItem(at: root) }

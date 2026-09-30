@@ -44,10 +44,25 @@ enum CLIPrompt {
     /// a menu can be open below the scrolled view.
     static func liveScreen(of terminal: TerminalView) -> [String] {
         let rows = terminal.terminalDimensions.rows
-        var lines = String(decoding: terminal.getBufferAsData(kind: .active), as: UTF8.self)
+        guard rows > 0 else { return [] }
+        let data = terminal.getBufferAsData(kind: .active)
+        guard !data.isEmpty else { return [] }
+        var end = data.endIndex
+        if data[data.index(before: end)] == 0x0a { end = data.index(before: end) }
+        var start = end
+        var newlines = 0
+        while start > data.startIndex {
+            let previous = data.index(before: start)
+            if data[previous] == 0x0a {
+                newlines += 1
+                if newlines == rows { break }
+            }
+            start = previous
+        }
+        return String(decoding: data[start..<end], as: UTF8.self)
+            .replacingOccurrences(of: "\u{0}", with: " ")
+            .replacingOccurrences(of: "\u{00a0}", with: " ")
             .components(separatedBy: "\n")
-        if lines.last == "" { lines.removeLast() }
-        return Array(lines.suffix(rows))
     }
 
     /// Claude draws its input as a `❯` line between two horizontal rules.

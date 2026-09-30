@@ -25,4 +25,12 @@ m4ix.CLI should be a reliable macOS workspace for using Claude and Codex togethe
 - Verify the actual packaged app with both providers, including images, handoffs, restoration, and shutdown.
 - Keep app setup and recovery understandable without requiring knowledge of the host implementation.
 
-The editable handoff and prompt reliability changes are a first implementation. Worktree collaboration, durable task coordination, performance measurements, and packaged runtime verification remain open.
+## Verification for 0.10.4
+
+Shared briefs, owned tasks, editable handoffs with durable history, and isolated Git worktrees are implemented. Task completion and branch integration remain explicit user decisions.
+
+Automated checks cover concurrent hosted processes, project routing, cancellation and draft recovery, bounded commands and history, shared worktree context, restoration, shutdown, and interface layout. Terminal stress tests measure responsiveness under concurrent output.
+
+The packaged release passed real Claude and Codex prompts, cross-provider handoff, conversation restoration, image delivery, and shutdown. A five-second idle sample with both terminals open measured 0.43% CPU and 93 MB resident memory on the development machine; this is a local sample, not a guarantee for every machine or workload. Extended provider checks also passed multiple images and image delivery after resizing.
+
+GitHub CI runs Swift tests, launcher checks, release packaging, and artifact upload. Authenticated provider checks are opt-in local checks because CI has no user credentials.

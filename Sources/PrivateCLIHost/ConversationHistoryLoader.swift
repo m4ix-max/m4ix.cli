@@ -12,11 +12,12 @@ struct ConversationRecord: Identifiable, Equatable {
 }
 
 enum ConversationHistoryLoader {
-    static func load(profileBase: URL) -> [ConversationRecord] {
+    static func load(profileBase: URL, cache: ConversationHistoryCache? = nil) -> [ConversationRecord] {
         let codexProfile = profileBase.appendingPathComponent("codex", isDirectory: true)
         let claudeProfile = profileBase.appendingPathComponent("claude", isDirectory: true)
         let codex = loadCodexFromSQLite(codexProfile) ?? loadCodexFromRollouts(codexProfile)
-        return (codex + loadClaude(claudeProfile)).sorted {
+        let claude = cache?.claude(profile: claudeProfile, loader: { loadClaude(claudeProfile) }) ?? loadClaude(claudeProfile)
+        return (codex + claude).sorted {
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
             return $0.id < $1.id
         }
@@ -250,11 +251,36 @@ enum ConversationHistoryLoader {
     }
 
     private static func forEachJSONLine(at url: URL, _ body: ([String: Any]) -> Void) {
-        guard let data = try? Data(contentsOf: url) else { return }
-        for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
-            guard let row = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any] else { continue }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? handle.close() }
+        var pending = Data()
+        var skippingOversizedLine = false
+        let maximumLineBytes = 1_048_576
+        func consume(_ line: Data) {
+            guard !line.isEmpty,
+                  let row = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
             body(row)
         }
+        while let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty {
+            var start = chunk.startIndex
+            for index in chunk.indices where chunk[index] == 0x0a {
+                if !skippingOversizedLine {
+                    pending.append(chunk[start..<index])
+                    if pending.count <= maximumLineBytes { consume(pending) }
+                }
+                pending.removeAll(keepingCapacity: true)
+                skippingOversizedLine = false
+                start = chunk.index(after: index)
+            }
+            if !skippingOversizedLine {
+                pending.append(chunk[start...])
+                if pending.count > maximumLineBytes {
+                    pending.removeAll(keepingCapacity: true)
+                    skippingOversizedLine = true
+                }
+            }
+        }
+        if !skippingOversizedLine { consume(pending) }
     }
 
     private static func cleanTitle(_ raw: String?) -> String {
@@ -273,5 +299,35 @@ enum ConversationHistoryLoader {
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = fractional.date(from: string) { return date }
         return ISO8601DateFormatter().date(from: string)
+    }
+}
+
+
+/// Runtime cache for the append-only Claude history. Codex's SQLite query
+/// stays fresh on every refresh; unchanged Claude logs avoid repeated parsing.
+final class ConversationHistoryCache: @unchecked Sendable {
+    private struct Fingerprint: Equatable {
+        let size: UInt64
+        let modified: Date
+        let inode: UInt64
+    }
+    private let lock = NSLock()
+    private var entries: [String: (Fingerprint, [ConversationRecord])] = [:]
+
+    private func fingerprint(_ url: URL) -> Fingerprint? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber,
+              let modified = attributes[.modificationDate] as? Date,
+              let inode = attributes[.systemFileNumber] as? NSNumber else { return nil }
+        return Fingerprint(size: size.uint64Value, modified: modified, inode: inode.uint64Value)
+    }
+
+    func claude(profile: URL, loader: () -> [ConversationRecord]) -> [ConversationRecord] {
+        let url = profile.appendingPathComponent("history.jsonl")
+        guard let before = fingerprint(url) else { return loader() }
+        if let cached = lock.withLock({ entries[url.path] }), cached.0 == before { return cached.1 }
+        let records = loader()
+        if fingerprint(url) == before { lock.withLock { entries[url.path] = (before, records) } }
+        return records
     }
 }

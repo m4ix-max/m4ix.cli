@@ -9,7 +9,9 @@ struct HandoffDraft: Identifiable {
     let context: String
 
     func prompt(task: String, context: String) -> String {
-        """
+        let title = task.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: .newlines).first ?? ""
+        return """
+        Handoff: \(String(title.prefix(80)))
         Project handoff from \(source) to \(target).
 
         Requested task:
@@ -27,13 +29,14 @@ struct HandoffDraft: Identifiable {
 
 struct HandoffView: View {
     let draft: HandoffDraft
-    let onStart: (String) -> Bool
+    let onStart: (String) async throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var task = ""
     @State private var context: String
-    @State private var failed = false
+    @State private var failure: String?
+    @State private var starting = false
 
-    init(draft: HandoffDraft, onStart: @escaping (String) -> Bool) {
+    init(draft: HandoffDraft, onStart: @escaping (String) async throws -> Void) {
         self.draft = draft
         self.onStart = onStart
         _context = State(initialValue: draft.context)
@@ -45,24 +48,31 @@ struct HandoffView: View {
             Text("Start a new conversation in \(URL(fileURLWithPath: draft.projectPath).lastPathComponent). Your \(draft.source) session stays available.")
                 .foregroundStyle(.secondary)
             Text("What should \(draft.target) do next?")
-            TextEditor(text: $task).frame(height: 90).border(Color.secondary.opacity(0.3))
+            TextEditor(text: $task).disabled(starting).frame(height: 90).border(Color.secondary.opacity(0.3))
             Text("Context to share").font(.headline)
             Text("This is only the current terminal screen. Add decisions, files, and test results the next agent needs. Remove anything you do not want to share.")
                 .font(.callout).foregroundStyle(.secondary)
-            TextEditor(text: $context).font(.system(.body, design: .monospaced))
+            TextEditor(text: $context).disabled(starting).font(.system(.body, design: .monospaced))
                 .frame(minHeight: 180).border(Color.secondary.opacity(0.3))
-            if failed { Text("Could not start the conversation. Check that the project folder and launcher are available.").foregroundStyle(.red) }
+            if let failure { Text(failure).foregroundStyle(.red) }
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(starting)
                 Button("Start \(draft.target)") {
-                    if onStart(draft.prompt(task: task, context: context)) { dismiss() }
-                    else { failed = true }
+                    starting = true
+                    Task {
+                        defer { starting = false }
+                        do {
+                            try await onStart(draft.prompt(task: task, context: context))
+                            dismiss()
+                        } catch { failure = error.localizedDescription }
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(starting || task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(24).frame(width: 640, height: 540)
+        .interactiveDismissDisabled(starting)
     }
 }
