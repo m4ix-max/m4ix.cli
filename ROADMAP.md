@@ -48,7 +48,8 @@ stapling, Gatekeeper checks, and SHA-256 checksums. The local package and
 checksum passed verification. The production path has not been exercised:
 this Mac currently has no Developer ID Application certificate.
 
-The GitHub repository remains private. Public release requires the source
-license decision, distribution credentials, a signed production build, and
-clean-machine Gatekeeper verification. Release notes and procedure live in
-Packaging. No production release has been published.
+The GitHub repository is public under MIT. Sir selected source distribution
+on 2026-09-30 and explicitly excluded paid Apple signing from the current
+release. GitHub supplies source archives; local and CI packages use ad hoc
+signing. Notarization and clean-machine Gatekeeper verification are future
+work if signed app downloads are introduced.

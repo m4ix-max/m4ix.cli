@@ -1,6 +1,20 @@
-# External release
+# Release procedure
 
-Production releases require a Developer ID Application certificate and a
+## Open-source release (current)
+
+The current release distributes MIT-licensed source on GitHub. Apple signing
+and notarization are optional future distribution work, not release blockers.
+
+1. Run Swift tests, launcher checks, and local release packaging.
+2. Update release notes and verify the MIT notices are included in the app.
+3. Push the reviewed source and wait for App checks on that exact commit.
+4. Create a GitHub release at the checked commit using RELEASE-NOTES.md.
+   GitHub supplies source archives. Do not attach CI ZIPs as notarized apps.
+5. Verify the published tag, release, source archives, and license.
+
+## Optional notarized app distribution
+
+Notarized app downloads require a Developer ID Application certificate and a
 notarytool keychain profile on the packaging Mac. Apple Development and ad hoc
 signatures are for local checks only.
 

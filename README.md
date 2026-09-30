@@ -92,6 +92,13 @@ Release version and build number live in `Packaging/version.env`. Packaging with
 
 ## External distribution
 
+The public release distributes MIT-licensed source. Build locally with the
+command above; Apple Developer membership is not required. Local builds are
+ad hoc signed. There is no Apple-notarized app download in this release.
+
+Optional future notarized distribution:
+
+
 Production packaging uses `bash Packaging/build-and-package.sh --production`
 with a Developer ID Application identity and a notarization keychain profile.
 It verifies Gatekeeper acceptance and produces a SHA-256 checksum alongside the
