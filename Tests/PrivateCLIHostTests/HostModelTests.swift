@@ -4,6 +4,13 @@ import XCTest
 
 @MainActor
 final class HostModelTests: XCTestCase {
+    func testTestRunsKeepOutOfTheUserDataDirectory() {
+        let base = HostPaths.profileBase.standardizedFileURL.path
+        XCTAssertNotEqual(base, HostPaths.userDataDirectory.standardizedFileURL.path,
+                          "A test run must not write into the app's private profiles or event log")
+        XCTAssertTrue(HostDiagnostics.logURL.path.hasPrefix(base + "/"))
+    }
+
     func testUnavailableStartupProjectDoesNotLaunchInAnotherFolder() throws {
         let suite = "m4ix.cli.startup." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

@@ -27,7 +27,7 @@ final class SharedChatTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         // Use the app's existing private logins. The test sends only a short
         // discussion and does not approve tools or request project changes.
-        let chat = SharedChat(project: root, profileBase: HostPaths.profileBase)
+        let chat = SharedChat(project: root, profileBase: HostPaths.userDataDirectory)
         defer { chat.stop() }
         await chat.load()
         chat.replyLimit = 4
@@ -49,7 +49,7 @@ final class SharedChatTests: XCTestCase {
         await chat.flush()
         // Remove only this test's host-side discussion record. The CLIs own
         // their ordinary conversation histories and are left to retain them.
-        let store = SharedChatStore(profileBase: HostPaths.profileBase, project: root)
+        let store = SharedChatStore(profileBase: HostPaths.userDataDirectory, project: root)
         let saved = await store.url
         try? FileManager.default.removeItem(at: saved)
     }

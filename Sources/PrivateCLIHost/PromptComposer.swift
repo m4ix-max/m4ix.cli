@@ -19,6 +19,9 @@ struct PromptComposer: View {
     }
 
     let mode: Mode
+    /// Side by side, only the pane in use answers Command-Return. Two Send
+    /// buttons with one shortcut would send the first pane's draft.
+    let takesKeyboardShortcut: Bool
     /// Moves the cursor into the bar each time it changes, as when an image
     /// is pasted while the terminal has focus.
     let focusRequest: Int
@@ -48,6 +51,7 @@ struct PromptComposer: View {
         focusRequest: Int = 0,
         allowsAutomaticFocus: @escaping () -> Bool = { true },
         mode: Mode,
+        takesKeyboardShortcut: Bool = true,
         agentName: String,
         projectName: String,
         isBusy: Bool = false,
@@ -65,6 +69,7 @@ struct PromptComposer: View {
         self.focusRequest = focusRequest
         self.allowsAutomaticFocus = allowsAutomaticFocus
         self.mode = mode
+        self.takesKeyboardShortcut = takesKeyboardShortcut
         self.agentName = agentName
         self.projectName = projectName
         self.isBusy = isBusy
@@ -199,7 +204,7 @@ struct PromptComposer: View {
                     }
                     .buttonStyle(ElevateHoverButtonStyle())
                     .disabled(!canSubmit)
-                    .keyboardShortcut(.return, modifiers: .command)
+                    .keyboardShortcut(takesKeyboardShortcut ? KeyboardShortcut(.return, modifiers: .command) : nil)
                     .accessibilityLabel(mode == .start ? "Start a conversation" : "Send prompt")
                     .accessibilityIdentifier("promptSubmit")
                 }

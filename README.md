@@ -119,6 +119,8 @@ bash Tests/Launcher/agent-launcher-test.sh
 swift build --disable-sandbox -c release
 ```
 
+Test runs keep their data and event log in a temporary folder and never write into the private profiles. The opt-in live tests below use the private profiles' existing logins explicitly.
+
 GitHub Actions runs the Swift and launcher checks, packages a signed app without installing it, and retains the ZIP as a build artifact. Requirements and verification evidence are tracked in ROADMAP.md.
 
 To exercise a packaged build with your authenticated private accounts:

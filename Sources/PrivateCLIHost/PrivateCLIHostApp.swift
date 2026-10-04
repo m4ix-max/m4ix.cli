@@ -54,12 +54,24 @@ enum TerminalState: Equatable {
 }
 
 enum HostPaths {
+    /// The private profiles, logins, and event log of the installed app.
+    static let userDataDirectory: URL = {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return support.appendingPathComponent("Private CLI Host", isDirectory: true)
+    }()
+
     static let profileBase: URL = {
+        // A test process must never write into the user's profiles or event
+        // log, including when it inherits a hosted session's data folder.
+        // Tests that need the real logins pass userDataDirectory explicitly.
+        if NSClassFromString("XCTestCase") != nil {
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("m4ix.cli-tests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        }
         if let override = ProcessInfo.processInfo.environment["PRIVATE_CLI_HOST_DATA_DIR"], !override.isEmpty {
             return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true).standardizedFileURL
         }
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return support.appendingPathComponent("Private CLI Host", isDirectory: true)
+        return userDataDirectory
     }()
 
     static let preferences: UserDefaults = {
@@ -283,9 +295,13 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         let count = agent == .codex ? CLIPrompt.backgroundTerminalCount(in: CLIPrompt.liveScreen(of: terminal)) : 0
         if backgroundTerminalCount != count { backgroundTerminalCount = count }
         if acceptsPromptText != ready { acceptsPromptText = ready }
-        if wasReady, ready, let queued = queuedPrompt {
+        if wasReady, ready, !isSendingPrompt, let queued = queuedPrompt {
             queuedPrompt = nil
-            _ = sendPrompt(queued.text, images: queued.images)
+            if !sendPrompt(queued.text, images: queued.images) {
+                // A CLI version the composer was not checked against keeps
+                // its own input, so the text waits for the user instead.
+                promptRecovery = PromptRecovery(text: queued.text, images: queued.images)
+            }
         }
     }
 
@@ -296,7 +312,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     func sendPrompt(_ text: String, images: [URL] = []) -> Bool {
         let ready = screenAcceptsText()
         if acceptsPromptText != ready { acceptsPromptText = ready }
-        guard ready, !isSendingPrompt else { return false }
+        guard ready, !isSendingPrompt, compatibility.usesComposer else { return false }
         isSendingPrompt = true
         let bracketed = terminal.terminalStateSnapshot().bracketedPasteMode
         promptTask = Task { @MainActor [weak self] in
@@ -1116,8 +1132,24 @@ final class HostModel: ObservableObject {
         let agent = agent ?? selected
         let session = currentWorkspace.session(for: agent)
         guard session.state != .queued else { return false }
-        if session.hostsConversation { return session.sendPrompt(text, images: images) }
+        if session.hostsConversation {
+            guard session.sendPrompt(text, images: images) else { return false }
+            // Delivery runs after this returns, so the record exists before anything is typed.
+            recordPendingDelivery(session, text: text, images: images)
+            return true
+        }
         return startNewConversation(initialPrompt: text, images: images, for: agent)
+    }
+
+    /// Keeps a prompt recoverable until the session that types it confirms
+    /// delivery. A new conversation delivers through its own session, not
+    /// the idle one its message was written in.
+    private func recordPendingDelivery(_ session: TerminalSession, text: String, images: [URL]) {
+        production.saveDraft(id: session.id, project: session.projectPath, provider: session.agent.rawValue,
+                             profileID: session.profileID, text: text, images: images, deliveryUnconfirmed: true)
+        production.flush()
+        let id = session.id
+        session.onPromptDelivered = { [weak production = self.production] in production?.removeDraft(id) }
     }
 
     @discardableResult
@@ -1135,6 +1167,9 @@ final class HostModel: ObservableObject {
             session.onCodexIdentityPrefix = { [weak self] in self?.refreshHistory() }
         }
         sessionRevision += 1
+        if initialPrompt != nil || !images.isEmpty {
+            recordPendingDelivery(session, text: initialPrompt ?? "", images: images)
+        }
         let newID = agent == .claude ? UUID().uuidString.lowercased() : nil
         enqueue(session, action: .run, conversationID: newID, prompt: initialPrompt, images: images)
         refreshHistory()
@@ -1281,12 +1316,6 @@ final class HostModel: ObservableObject {
         sharedChats.values.forEach { $0.close() }
         production.flush()
         verification.flush()
-    }
-
-    func cancelTermination(message: String) {
-        isShuttingDown = false
-        operationError = message
-        startPeriodicWork()
     }
 
     func stopAllSessions() {
@@ -1703,6 +1732,7 @@ private struct PromptBar: View {
     let text: Binding<String>
     let images: Binding<[PromptImage]>
     let focusRequest: Int
+    let takesKeyboardShortcut: Bool
     let agentName: String
     let projectName: String
     let isEnabled: Bool
@@ -1733,6 +1763,7 @@ private struct PromptBar: View {
                                                   agent: session.agent) == nil
             },
             mode: mode,
+            takesKeyboardShortcut: takesKeyboardShortcut,
             agentName: agentName,
             projectName: projectName,
             isBusy: session.isSendingPrompt,
@@ -2775,6 +2806,7 @@ struct HostView: View {
                 text: taskDraft(for: session),
                 images: imageDraft(for: session),
                 focusRequest: promptFocusRequests[agent, default: 0],
+                takesKeyboardShortcut: isActive,
                 agentName: agent.title,
                 projectName: model.workingDirectory.lastPathComponent,
                 isEnabled: model.isCurrentProjectAvailable && session.state != .queued && session.compatibility.usesComposer,
@@ -2783,16 +2815,7 @@ struct HostView: View {
                     toggleDictation(for: session)
                 },
                 onActivate: { activate(agent) },
-                onSubmit: { text, images in
-                    production.saveDraft(id: session.id, project: session.projectPath, provider: session.agent.rawValue,
-                        profileID: session.profileID, text: text, images: images.map(\.url), deliveryUnconfirmed: true)
-                    production.flush()
-                    let draftID = session.id
-                    session.onPromptDelivered = { [weak production = production] in production?.removeDraft(draftID) }
-                    let accepted = model.submitPrompt(text, images: images.map(\.url), for: agent)
-                    if !accepted { persistDraft(key: key, session: session) }
-                    return accepted
-                },
+                onSubmit: { text, images in model.submitPrompt(text, images: images.map(\.url), for: agent) },
                 onRecover: { recovery in
                     taskDrafts[key] = recovery.text
                     imageDrafts[key] = recovery.images.compactMap { url in
@@ -2878,6 +2901,8 @@ struct HostView: View {
 @MainActor
 final class PrivateCLIAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var model: HostModel?
+    /// Starts the helper that installs a staged update once this process exits.
+    var scheduleUpdate: (URL, URL) throws -> Void = AppUpdates.installAfterExit
     private var terminationPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -2899,8 +2924,17 @@ final class PrivateCLIAppDelegate: NSObject, NSApplicationDelegate, UNUserNotifi
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if terminationPending { return .terminateLater }
-        model?.prepareForTermination()
         guard let model else { return .terminateNow }
+        // The helper waits for this process to exit, so it starts before any
+        // session stops. If it cannot start, every session keeps running.
+        if let update = model.pendingUpdate {
+            do { try scheduleUpdate(update, model.dataRoot) }
+            catch {
+                model.operationError = "The update could not be scheduled: \(error.localizedDescription)"
+                return .terminateCancel
+            }
+        }
+        model.prepareForTermination()
         terminationPending = true
         model.stopAllSessions()
         Task { @MainActor in
@@ -2912,15 +2946,6 @@ final class PrivateCLIAppDelegate: NSObject, NSApplicationDelegate, UNUserNotifi
             await model.flushSharedChats()
             model.production.flush()
             model.verification.flush()
-            if let update = model.pendingUpdate {
-                do { try AppUpdates.installAfterExit(update, root: model.dataRoot) }
-                catch {
-                    self.terminationPending = false
-                    model.cancelTermination(message: "The update could not be scheduled: \(error.localizedDescription)")
-                    sender.reply(toApplicationShouldTerminate: false)
-                    return
-                }
-            }
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

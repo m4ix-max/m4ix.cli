@@ -248,6 +248,37 @@ final class HostedSessionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: capture.path))
     }
 
+    func testQuitThatCannotScheduleItsUpdateLeavesSessionsRunning() async throws {
+        _ = NSApplication.shared
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let capture = root.appendingPathComponent("after-cancelled-quit.jsonl")
+        setenv("HOST_TEST_CAPTURE", capture.path, 1)
+        defer { unsetenv("HOST_TEST_CAPTURE") }
+        let suite = "m4ix.cli.update-quit." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = HostModel(defaults: defaults, profileBase: root.appendingPathComponent("profiles"))
+        defer { model.stopAllSessions() }
+        model.openWorkspace(root)
+        XCTAssertTrue(model.startNewConversation())
+        let session = model.currentSession
+        try await waitUntil { session.refreshPromptReadiness(); return session.acceptsPromptText }
+        model.pendingUpdate = root.appendingPathComponent("staged/m4ix.CLI.app")
+        let delegate = PrivateCLIAppDelegate()
+        delegate.model = model
+        delegate.scheduleUpdate = { _, _ in throw CommandError.failed("The update helper is unavailable.") }
+
+        XCTAssertEqual(delegate.applicationShouldTerminate(NSApplication.shared), .terminateCancel)
+        XCTAssertEqual(model.operationError, "The update could not be scheduled: The update helper is unavailable.")
+        XCTAssertTrue(session.state.isRunning, "A quit that cannot schedule its update must not stop sessions")
+        XCTAssertTrue(model.submitPrompt("still working", images: []))
+        // The fixture creates the file before it writes the record.
+        try await waitUntil { ((try? String(contentsOf: capture, encoding: .utf8)) ?? "").hasSuffix("\n") }
+        let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: capture)) as? [String: String])
+        XCTAssertEqual(record["prompt"], "still working")
+    }
+
     private func waitUntil(file: StaticString = #filePath, line: UInt = #line, _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(10)
         while !condition() {
