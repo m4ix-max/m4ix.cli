@@ -4,6 +4,21 @@ import XCTest
 
 @MainActor
 final class HostModelTests: XCTestCase {
+    func testUnavailableStartupProjectDoesNotLaunchInAnotherFolder() throws {
+        let suite = "m4ix.cli.startup." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defaults.set(missing.path, forKey: "PrivateCLIHostWorkingDirectory")
+        defaults.set("unknown-provider", forKey: "PrivateCLIHostSelectedAgent")
+        let model = HostModel(defaults: defaults, profileBase: missing.appendingPathComponent("profiles"))
+        model.startOnLaunch()
+        XCTAssertEqual(model.selected, .claude)
+        XCTAssertEqual(model.workingDirectory.path, missing.path)
+        XCTAssertFalse(model.hasRunningSessions)
+        XCTAssertTrue(model.liveSessionsForCurrentProject().isEmpty)
+    }
+
     func testRestorationIsLazyProviderSelectionIsCorrectAndRemovedSessionsStayRemoved() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let profile = root.appendingPathComponent("profiles")
@@ -45,12 +60,14 @@ final class HostModelTests: XCTestCase {
         let restored = HostModel(defaults: defaults, profileBase: profile)
         restored.restoreSessions()
         XCTAssertTrue(restored.liveSessionsForCurrentProject().isEmpty, "Removed and unknown sessions must not reappear")
+        restored.selected = .claude
         restored.currentWorkspace.restoreConversation(for: .claude, title: "Pending", conversationID: claudeID, selected: true)
         restored.refreshHistory()
         let loadedDeadline = Date().addingTimeInterval(3)
         while restored.conversations.isEmpty && Date() < loadedDeadline { try await Task.sleep(nanoseconds: 10_000_000) }
         restored.prepareForTermination()
         let pending = restored.currentSession
+        restored.startOnLaunch()
         restored.startCurrentIfPending()
         restored.openConversation(try XCTUnwrap(restored.conversations.first))
         restored.showLogin()

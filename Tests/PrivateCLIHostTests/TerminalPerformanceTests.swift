@@ -35,8 +35,10 @@ final class TerminalPerformanceTests: XCTestCase {
     }
 
     func testLongScrollbackScreenReadLatency() throws {
-        let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 520))
-        let history = (0..<2000).map { "line \($0): " + String(repeating: "terminal output ", count: 5) }.joined(separator: "\r\n")
+        let session = TerminalSession(agent: .codex, projectPath: "/tmp", title: "Long scrollback")
+        let view = session.terminal
+        let historyLines = 10_000
+        let history = (0..<historyLines).map { "line \($0): " + String(repeating: "terminal output ", count: 5) }.joined(separator: "\r\n")
         view.feed(text: history + "\r\n› Ask anything\r\n")
         var samples: [Double] = []
         for _ in 0..<30 {
@@ -49,7 +51,7 @@ final class TerminalPerformanceTests: XCTestCase {
         samples.sort()
         let p95 = samples[Int(Double(samples.count - 1) * 0.95)]
         let result: [String: Any] = ["screenReadP50MS": samples[samples.count / 2], "screenReadP95MS": p95,
-                                     "screenRows": view.terminalDimensions.rows, "historyLinesFed": 2000,
+                                     "screenRows": view.terminalDimensions.rows, "historyLinesFed": historyLines,
                                      "configuration": "SwiftPM debug XCTest"]
         print("Terminal measurement: \(result)")
         // A status read runs once a second; this gate catches major regressions

@@ -105,6 +105,8 @@ cat > "$STAGED_APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSMicrophoneUsageDescription</key><string>m4ix.CLI listens only while you dictate a message. Speech is transcribed on this Mac.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>Dictated messages are transcribed on this Mac.</string>
 </dict>
 </plist>
 PLIST
@@ -138,7 +140,9 @@ fi
 
 plutil -lint "$STAGED_APP/Contents/Info.plist"
 if [[ "$PRODUCTION_BUILD" == true ]]; then
-    codesign --force --sign "$M4IX_SIGNING_IDENTITY" --options runtime --timestamp "$STAGED_APP"
+    # The hardened runtime blocks the microphone unless the entitlement asks for it.
+    codesign --force --sign "$M4IX_SIGNING_IDENTITY" --options runtime --timestamp \
+        --entitlements "$SCRIPT_DIR/m4ix.CLI.entitlements" "$STAGED_APP"
 else
     codesign --force --sign - --timestamp=none "$STAGED_APP"
 fi

@@ -22,10 +22,20 @@ struct PromptComposer: View {
     /// Moves the cursor into the bar each time it changes, as when an image
     /// is pasted while the terminal has focus.
     let focusRequest: Int
+    let allowsAutomaticFocus: () -> Bool
     let agentName: String
     let projectName: String
     let isBusy: Bool
     let isEnabled: Bool
+    /// Absent where the composer has no microphone, as in previews.
+    let dictation: Dictation?
+    /// The draft dictation writes into when started from this composer.
+    let dictationTarget: String
+    let isDictating: Bool
+    let onDictate: () -> Void
+    /// Called when the text field takes the keyboard, so a side-by-side
+    /// pane can become the one in use.
+    let onActivate: () -> Void
     let onSubmit: (String, [PromptImage]) -> Bool
     let onTerminal: () -> Void
 
@@ -36,22 +46,34 @@ struct PromptComposer: View {
         text: Binding<String>,
         images: Binding<[PromptImage]>,
         focusRequest: Int = 0,
+        allowsAutomaticFocus: @escaping () -> Bool = { true },
         mode: Mode,
         agentName: String,
         projectName: String,
         isBusy: Bool = false,
         isEnabled: Bool = true,
+        dictation: Dictation? = nil,
+        dictationTarget: String = "",
+        isDictating: Bool = false,
+        onDictate: @escaping () -> Void = {},
+        onActivate: @escaping () -> Void = {},
         onTerminal: @escaping () -> Void = {},
         onSubmit: @escaping (String, [PromptImage]) -> Bool
     ) {
         self._taskText = text
         self._images = images
         self.focusRequest = focusRequest
+        self.allowsAutomaticFocus = allowsAutomaticFocus
         self.mode = mode
         self.agentName = agentName
         self.projectName = projectName
         self.isBusy = isBusy
         self.isEnabled = isEnabled
+        self.dictation = dictation
+        self.dictationTarget = dictationTarget
+        self.isDictating = isDictating
+        self.onDictate = onDictate
+        self.onActivate = onActivate
         self.onSubmit = onSubmit
         self.onTerminal = onTerminal
     }
@@ -61,11 +83,12 @@ struct PromptComposer: View {
     }
 
     private var canSubmit: Bool {
-        isEnabled && !isBusy && mode != .blocked && !(trimmedTask.isEmpty && images.isEmpty)
+        isEnabled && !isBusy && !isDictating && mode != .blocked && !(trimmedTask.isEmpty && images.isEmpty)
     }
 
     private var placeholder: String {
-        mode == .start ? "Start a conversation with \(agentName)…" : "Write to \(agentName)…"
+        if isDictating { return "Listening…" }
+        return mode == .start ? "Start a conversation with \(agentName)…" : "Write to \(agentName)…"
     }
 
     private var buttonTitle: String {
@@ -81,7 +104,7 @@ struct PromptComposer: View {
                     Text("A question or approval is waiting in the terminal.")
                     Spacer(minLength: 8)
                     Button("Answer in terminal", action: onTerminal)
-                        .buttonStyle(.plain)
+                        .buttonStyle(ElevateHoverButtonStyle())
                         .foregroundStyle(ElevateTheme.ink)
                         .accessibilityIdentifier("promptAnswerTerminal")
                 }
@@ -109,12 +132,16 @@ struct PromptComposer: View {
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
                     }
+                    // Read-only while dictating: each new phrase replaces the
+                    // text after the draft that was there when listening began.
                     SubmittingTextView(
                         text: $taskText,
-                        isEditable: isEnabled && !isBusy,
+                        isEditable: isEnabled && !isBusy && !isDictating,
                         focusRequest: focusRequest,
+                        allowsAutomaticFocus: allowsAutomaticFocus,
                         onSubmit: submit,
-                        onImages: { images += $0 }
+                        onImages: { images += $0 },
+                        onActivate: onActivate
                     )
                     .frame(height: min(132, 44 + CGFloat(taskText.filter { $0 == "\n" }.count) * 18))
                     .accessibilityLabel("Prompt for \(agentName) in \(projectName)")
@@ -126,7 +153,7 @@ struct PromptComposer: View {
                         Image(systemName: "photo.badge.plus")
                             .frame(width: 28, height: 28)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ElevateHoverButtonStyle())
                     .disabled(!isEnabled || isBusy)
                     .help("Add images")
                     .accessibilityLabel("Add images")
@@ -136,18 +163,32 @@ struct PromptComposer: View {
                         Image(systemName: "keyboard")
                             .frame(width: 28, height: 28)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ElevateHoverButtonStyle())
                     .help("Terminal controls (⌘⇧T)")
                     .accessibilityLabel("Use terminal controls")
                     .accessibilityIdentifier("promptTerminalControls")
-                    Spacer()
-                    Text("↵ Send   ⇧↵ New line")
-                        .font(.system(size: 10))
-                        .foregroundStyle(ElevateTheme.graphite)
+
+                    if let dictation, Dictation.isSupported {
+                        DictationControl(dictation: dictation, target: dictationTarget,
+                                         isEnabled: isEnabled && !isBusy, onToggle: onDictate)
+                    }
+                    Spacer(minLength: 8)
+                    if isDictating, let dictation {
+                        DictationStatus(dictation: dictation, meter: dictation.meter)
+                    } else {
+                        // Side-by-side panes can be too narrow for the hint.
+                        ViewThatFits(in: .horizontal) {
+                            Text("↵ Send   ⇧↵ New line")
+                                .font(.system(size: 10))
+                                .foregroundStyle(ElevateTheme.graphite)
+                                .fixedSize()
+                            Color.clear.frame(width: 0, height: 0)
+                        }
                         .accessibilityHidden(true)
+                    }
                     Button(action: submit) {
                         HStack(spacing: 6) {
-                            Text(buttonTitle).font(.system(size: 12, weight: .medium))
+                            Text(buttonTitle).font(.system(size: 12, weight: .medium)).fixedSize()
                             Image(systemName: "arrow.up").font(.system(size: 11, weight: .semibold))
                         }
                         .foregroundStyle(canSubmit ? ElevateTheme.onSignal : ElevateTheme.graphite)
@@ -156,7 +197,7 @@ struct PromptComposer: View {
                         .background(canSubmit ? ElevateTheme.signal : ElevateTheme.paperDeep,
                                     in: RoundedRectangle(cornerRadius: 6))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(ElevateHoverButtonStyle())
                     .disabled(!canSubmit)
                     .keyboardShortcut(.return, modifiers: .command)
                     .accessibilityLabel(mode == .start ? "Start a conversation" : "Send prompt")
@@ -229,7 +270,7 @@ private struct PromptImageChip: View {
                         .frame(width: 16, height: 16)
                         .background(ElevateTheme.ink, in: Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(ElevateHoverButtonStyle())
                 .padding(3)
                 .accessibilityLabel("Remove image")
             }
@@ -242,6 +283,7 @@ private struct PromptImageChip: View {
 /// would paste nothing or insert the file's path.
 final class PromptTextView: NSTextView {
     var wantsPromptFocus = false
+    var allowsAutomaticFocus: () -> Bool = { true }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if wantsPromptFocus { focusWhenAttached() }
@@ -250,10 +292,38 @@ final class PromptTextView: NSTextView {
         wantsPromptFocus = true
         DispatchQueue.main.async { [weak self] in
             guard let self, self.wantsPromptFocus, let window = self.window else { return }
+            guard self.allowsAutomaticFocus() else {
+                self.wantsPromptFocus = false
+                return
+            }
             if window.makeFirstResponder(self) { self.wantsPromptFocus = false }
         }
     }
     var onImages: (([PromptImage]) -> Void)?
+    var onActivate: (() -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { onActivate?() }
+        return became
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, event.type == .keyDown,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "v", onImages != nil,
+           PromptImageStore.canPasteImages(from: .general) {
+            paste(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), onImages != nil,
+           PromptImageStore.canPasteImages(from: .general) { return true }
+        return super.validateUserInterfaceItem(item)
+    }
 
     override func paste(_ sender: Any?) {
         let images = PromptImageStore.images(from: .general, isPaste: true)
@@ -278,8 +348,10 @@ private struct SubmittingTextView: NSViewRepresentable {
     @Binding var text: String
     let isEditable: Bool
     let focusRequest: Int
+    let allowsAutomaticFocus: () -> Bool
     let onSubmit: () -> Void
     let onImages: ([PromptImage]) -> Void
+    let onActivate: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -299,6 +371,8 @@ private struct SubmittingTextView: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         scrollView.documentView = textView
         textView.onImages = onImages
+        textView.onActivate = onActivate
+        textView.allowsAutomaticFocus = allowsAutomaticFocus
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false
@@ -318,6 +392,8 @@ private struct SubmittingTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? PromptTextView else { return }
         textView.onImages = onImages
+        textView.onActivate = onActivate
+        textView.allowsAutomaticFocus = allowsAutomaticFocus
         if focusRequest != context.coordinator.focusRequest {
             context.coordinator.focusRequest = focusRequest
             textView.focusWhenAttached()

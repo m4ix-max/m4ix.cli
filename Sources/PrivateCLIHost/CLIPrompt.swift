@@ -43,6 +43,12 @@ enum CLIPrompt {
     /// The rows the CLI is drawing now, whatever has been scrolled back to:
     /// a menu can be open below the scrolled view.
     static func liveScreen(of terminal: TerminalView) -> [String] {
+        if !terminal.canScroll || terminal.scrollPosition == 1 {
+            return terminal.terminalStateSnapshot().visibleRows.map {
+                $0.text.replacingOccurrences(of: "\u{0}", with: " ")
+                    .replacingOccurrences(of: "\u{00a0}", with: " ")
+            }
+        }
         let rows = terminal.terminalDimensions.rows
         guard rows > 0 else { return [] }
         let data = terminal.getBufferAsData(kind: .active)
@@ -69,6 +75,10 @@ enum CLIPrompt {
     /// Its dialogs replace that box, and their options start with `❯` too,
     /// so only the ruled box counts.
     static func claudeAcceptsText(screen: [String]) -> Bool {
+        rawClaudeAcceptsText(screen: screen) && terminalResponseRequest(screen: screen, agent: .claude) == nil
+    }
+
+    private static func rawClaudeAcceptsText(screen: [String]) -> Bool {
         guard !screen.contains(where: isNumberedOption) else { return false }
         for index in screen.indices where index > 0 && trimmed(screen[index]).hasPrefix("❯") {
             guard isRule(screen[index - 1]) else { continue }
@@ -81,6 +91,10 @@ enum CLIPrompt {
     /// their options, `› 1. Trust and continue`, so a numbered last line is
     /// a menu.
     static func codexAcceptsText(screen: [String]) -> Bool {
+        rawCodexAcceptsText(screen: screen) && terminalResponseRequest(screen: screen, agent: .codex) == nil
+    }
+
+    private static func rawCodexAcceptsText(screen: [String]) -> Bool {
         guard let last = screen.last(where: { trimmed($0).hasPrefix("›") }) else { return false }
         return !isNumberedOption(last)
     }
@@ -88,20 +102,68 @@ enum CLIPrompt {
     /// Only conceal an input we recognize in the actual visible viewport.
     /// Menus, approvals, and scrolled conversation output remain visible.
     static func inputStartRow(screen: [String], agent: Agent) -> Int? {
+        guard terminalResponseRequest(screen: screen, agent: agent) == nil else { return nil }
+        return rawInputStartRow(screen: screen, agent: agent)
+    }
+
+    private static func rawInputStartRow(screen: [String], agent: Agent) -> Int? {
         switch agent {
         case .claude:
-            guard claudeAcceptsText(screen: screen),
+            guard rawClaudeAcceptsText(screen: screen),
                   let row = screen.indices.last(where: { trimmed(screen[$0]).hasPrefix("❯") }), row > 0,
                   isRule(screen[row - 1]) else { return nil }
             return row - 1
         case .codex:
-            guard codexAcceptsText(screen: screen),
+            guard rawCodexAcceptsText(screen: screen),
                   let row = screen.indices.last(where: { trimmed(screen[$0]).hasPrefix("›") }) else { return nil }
             var start = row
             while start > 0 && screen[start - 1].trimmingCharacters(in: .whitespaces).isEmpty { start -= 1 }
             if start > 0 && backgroundTerminalCount(in: [screen[start - 1]]) > 0 { start -= 1 }
             return start
         }
+    }
+
+    /// Identifies a live keyboard interaction, including unnumbered choices
+    /// and confirmation prompts. The signature lets focus move once per
+    /// question without pulling readers back down on every scroll event.
+    static func terminalResponseRequest(screen: [String], agent: Agent) -> String? {
+        let rows = screen.map { $0.trimmingCharacters(in: .whitespaces) }
+        let nonempty = rows.indices.filter { !rows[$0].isEmpty }
+        guard let last = nonempty.last else { return nil }
+        let inputRow = rawInputStartRow(screen: screen, agent: agent)
+        let afterInput = inputRow ?? -1
+        var requestRow: Int?
+
+        if let selected = nonempty.last(where: {
+            rows[$0].range(of: #"^[❯›▶>]\s*\d+[.)]\s+"#, options: .regularExpression) != nil
+        }), selected > afterInput {
+            requestRow = selected
+        }
+        // Claude's trust and choice menus can have no numbers at all.
+        if agent == .claude, inputRow == nil,
+           let selected = nonempty.last(where: { rows[$0].hasPrefix("❯") }),
+           let next = nonempty.first(where: { $0 > selected }),
+           rows[selected].range(of: #"^❯\s*(?:yes|no|allow|deny|cancel|exit|trust|continue)\b"#,
+                                options: [.regularExpression, .caseInsensitive]) != nil,
+           rows[next].range(of: #"^(?:yes|no|allow|deny|cancel|exit|trust|continue)\b"#,
+                            options: [.regularExpression, .caseInsensitive]) != nil {
+            requestRow = selected
+        }
+        for index in nonempty.suffix(4) where index > afterInput {
+            let line = rows[index]
+            guard line.count < 180 else { continue }
+            let confirmation = line.range(of: #"(?:\[(?:y/n|yes/no)\]|\((?:y/n|yes/no)\))\s*[:?]?\s*$"#,
+                                          options: [.regularExpression, .caseInsensitive]) != nil
+            let pressEnter = line.range(of: #"^(?:press|hit)\s+(?:enter|return)\b"#,
+                                        options: [.regularExpression, .caseInsensitive]) != nil
+            let menuFooter = line.range(of: #"\b(?:enter|return)\s+(?:to\s+)?(?:confirm|continue|select|submit|accept|proceed)\b"#,
+                                        options: [.regularExpression, .caseInsensitive]) != nil
+                && line.range(of: #"\b(?:esc|escape|cancel|quit|skip)\b"#,
+                              options: [.regularExpression, .caseInsensitive]) != nil
+            if confirmation || pressEnter || menuFooter { requestRow = requestRow ?? index }
+        }
+        guard let requestRow else { return nil }
+        return rows[max(0, requestRow - 2)...last].joined(separator: "\n")
     }
 
     /// Codex's live process footer, not arbitrary mentions in the conversation.
@@ -126,6 +188,6 @@ enum CLIPrompt {
     }
 
     private static func isNumberedOption(_ line: String) -> Bool {
-        line.range(of: #"^\s*[❯›]\s*\d+\.\s"#, options: .regularExpression) != nil
+        line.range(of: #"^\s*[❯›]\s*\d+[.)]\s"#, options: .regularExpression) != nil
     }
 }

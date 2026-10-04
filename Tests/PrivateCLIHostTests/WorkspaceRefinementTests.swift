@@ -46,10 +46,15 @@ final class WorkspaceRefinementTests: XCTestCase {
     }
 
     func testComposerRendersDraftAndTerminalQuestionAtNarrowWidth() async throws {
+        let suite = "m4ix.cli.composer." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dictation = Dictation(preferences: defaults, bundle: Bundle(for: Self.self))
         for blocked in [false, true] {
             let view = NSHostingView(rootView: PromptComposer(
                 text: .constant("A draft stays here while I answer a question."), images: .constant([]),
                 mode: blocked ? .blocked : .send, agentName: "Codex", projectName: "Motion",
+                dictation: dictation, dictationTarget: "draft",
                 onSubmit: { _, _ in false }))
             view.frame = NSRect(x: 0, y: 0, width: 640, height: 200)
             let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)

@@ -5,6 +5,105 @@ import XCTest
 
 @MainActor
 final class HostedSessionTests: XCTestCase {
+    func testLaunchStartsOneBlankChatForLastUsedProviderAndKeepsRestoredChatsIdle() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for agent in Agent.allCases {
+            for hasHistory in [false, true] {
+                let suite = "m4ix.cli.startup." + UUID().uuidString
+                let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+                defer { defaults.removePersistentDomain(forName: suite) }
+                let profile = root.appendingPathComponent(suite)
+                let previous = HostModel(defaults: defaults, profileBase: profile)
+                previous.openWorkspace(root)
+                previous.selected = agent
+                let savedIDs = Agent.allCases.map { _ in UUID().uuidString.lowercased() }
+                if hasHistory {
+                    defaults.set(zip(Agent.allCases, savedIDs).map { provider, id in
+                        ["project": root.path, "agent": provider.rawValue, "conversation": id,
+                         "title": "Previous chat", "selected": true] as [String: Any]
+                    }, forKey: "PrivateCLIHostRestorableSessions")
+                }
+                let capture = root.appendingPathComponent(suite + ".jsonl")
+                setenv("HOST_TEST_LAUNCH_CAPTURE", capture.path, 1)
+                defer { unsetenv("HOST_TEST_LAUNCH_CAPTURE") }
+                let model = HostModel(defaults: defaults, profileBase: profile)
+                defer { model.stopAllSessions() }
+                XCTAssertEqual(model.selected, agent)
+                XCTAssertEqual(model.workingDirectory.path, root.path)
+                model.startOnLaunch()
+                let fresh = model.currentSession
+                try await waitUntil { fresh.refreshPromptReadiness(); return fresh.acceptsPromptText }
+                XCTAssertEqual(fresh.agent, agent)
+                XCTAssertEqual(fresh.state, .running(.run))
+                XCTAssertNil(fresh.initialPrompt)
+                XCTAssertNil(fresh.pendingResumeID)
+                XCTAssertFalse(savedIDs.contains(fresh.activeConversationID ?? ""))
+                XCTAssertEqual(fresh.displayTitle, "New conversation")
+                let restored = model.liveSessionsForCurrentProject().filter { $0.id != fresh.id }
+                XCTAssertEqual(restored.count, hasHistory ? 2 : 0)
+                XCTAssertTrue(restored.allSatisfy { $0.state == .idle && savedIDs.contains($0.pendingResumeID ?? "") })
+                model.startOnLaunch()
+                XCTAssertEqual(model.currentSession.id, fresh.id)
+                fresh.stop()
+                try await waitUntil { !model.hasRunningSessions }
+                model.startOnLaunch()
+                XCTAssertEqual(model.currentSession.id, fresh.id, "A window reappearing must not start another chat")
+                XCTAssertEqual(model.liveSessionsForCurrentProject().count, restored.count + 1)
+                XCTAssertFalse(model.hasRunningSessions)
+                let launches = try String(contentsOf: capture, encoding: .utf8).split(separator: "\n")
+                XCTAssertEqual(launches.count, 1, "Only the fresh chat may launch a CLI")
+                let launch = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(launches[0].utf8)) as? [String: Any])
+                let arguments = try XCTUnwrap(launch["arguments"] as? [String])
+                XCTAssertFalse(arguments.contains("resume"))
+                XCTAssertFalse(arguments.contains("--resume"))
+                XCTAssertTrue(Set(arguments).isDisjoint(with: savedIDs))
+                let directory = try XCTUnwrap(launch["cwd"] as? String)
+                XCTAssertEqual(URL(fileURLWithPath: directory).resolvingSymlinksInPath(), root.resolvingSymlinksInPath())
+            }
+        }
+    }
+
+    func testToolbarModelChoiceReachesNewAndResumedConversations() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "m4ix.cli.model-launch." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let capture = root.appendingPathComponent("launches.jsonl")
+        setenv("HOST_TEST_LAUNCH_CAPTURE", capture.path, 1)
+        defer { unsetenv("HOST_TEST_LAUNCH_CAPTURE") }
+        let model = HostModel(defaults: defaults, profileBase: root.appendingPathComponent("profiles"))
+        defer { model.stopAllSessions() }
+        model.openWorkspace(root)
+        model.setModelChoice(ModelChoice(model: "sonnet", effort: "high"), for: .claude)
+        model.setModelChoice(ModelChoice(model: "gpt-5.5"), for: .codex)
+
+        XCTAssertTrue(model.startNewConversation())
+        let claude = model.currentSession
+        try await waitUntil { claude.refreshPromptReadiness(); return claude.acceptsPromptText }
+        XCTAssertEqual(claude.launchedChoice, ModelChoice(model: "sonnet", effort: "high"))
+        model.setModelChoice(ModelChoice(model: "opus"), for: .claude)
+        XCTAssertEqual(claude.launchedChoice.model, "sonnet", "A running conversation keeps its launch model")
+
+        model.selected = .codex
+        let resumed = ConversationRecord(provider: "codex", sessionID: UUID().uuidString.lowercased(),
+                                         projectPath: model.workingDirectory.path, title: "Earlier work", updatedAt: Date())
+        model.openConversation(resumed)
+        let codex = model.currentSession
+        try await waitUntil { codex.refreshPromptReadiness(); return codex.acceptsPromptText }
+
+        let launches = try String(contentsOf: capture, encoding: .utf8).split(separator: "\n").map { line in
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])["arguments"] as? [String] ?? []
+        }
+        XCTAssertEqual(launches.count, 2)
+        let claudeArguments = try XCTUnwrap(launches.first { $0.contains("--session-id") })
+        XCTAssertTrue(claudeArguments.joined(separator: " ").contains("--model sonnet --effort high"), "\(claudeArguments)")
+        let codexArguments = try XCTUnwrap(launches.first { $0.contains("resume") })
+        XCTAssertTrue(codexArguments.contains(#"model="gpt-5.5""#), "\(codexArguments)")
+        XCTAssertFalse(codexArguments.contains { $0.hasPrefix("model_reasoning_effort") })
+    }
+
     func testBothProvidersAcceptOnePromptWithoutOverlappingDelivery() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -83,6 +182,54 @@ final class HostedSessionTests: XCTestCase {
         try await waitUntil { !model.hasRunningSessions }
     }
 
+    func testSideBySideComposersEachReachTheirOwnProvider() async throws {
+        _ = NSApplication.shared
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let suite = "m4ix.cli.split." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(project.path, forKey: "PrivateCLIHostWorkingDirectory")
+        let profiles = root.appendingPathComponent("profiles")
+        let model = HostModel(defaults: defaults, profileBase: profiles)
+        defer { model.stopAllSessions() }
+        XCTAssertEqual(model.visibleSessions.map(\.id), [model.currentSession.id])
+        model.isSplit = true
+        XCTAssertEqual(model.visibleSessions.map(\.agent), [.claude, .codex])
+        XCTAssertTrue(HostModel(defaults: defaults, profileBase: profiles).isSplit, "Side by side is remembered")
+
+        defer { unsetenv("HOST_TEST_CAPTURE") }
+        var captures: [Agent: URL] = [:]
+        for agent in Agent.allCases {
+            let capture = root.appendingPathComponent("\(agent.rawValue).jsonl")
+            captures[agent] = capture
+            setenv("HOST_TEST_CAPTURE", capture.path, 1)
+            XCTAssertTrue(model.submitPrompt("TASK_FOR_\(agent.rawValue.uppercased())", images: [], for: agent))
+            let session = model.currentWorkspace.session(for: agent)
+            // The launcher reads the capture path when the CLI starts.
+            try await waitUntil { session.state.isRunning }
+        }
+        XCTAssertEqual(model.selected, .claude, "Starting work in the other pane leaves the keyboard where it was")
+        let visible = model.visibleSessions
+        XCTAssertEqual(visible.map(\.agent), [.claude, .codex])
+        XCTAssertTrue(visible.allSatisfy { model.isSelected($0) && $0.hostsConversation })
+        try await waitUntil {
+            model.updateAttention()
+            return captures.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+        }
+        for (agent, capture) in captures {
+            let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: capture)) as? [String: String])
+            XCTAssertEqual(record["prompt"], "TASK_FOR_\(agent.rawValue.uppercased())")
+        }
+        model.isSplit = false
+        XCTAssertEqual(model.visibleSessions.map(\.id), [visible[0].id])
+        XCTAssertFalse(model.isSelected(visible[1]))
+        model.stopAllSessions()
+        try await waitUntil { !model.hasRunningSessions }
+    }
+
     func testStopCancelsQueuedAndInFlightPromptDelivery() async throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -116,9 +263,15 @@ final class HostedSessionTests: XCTestCase {
         let script = #"""
         #!/usr/bin/python3
         import json, os, sys, tty
+        if '--version' in sys.argv:
+            print('2.1.287 (Claude Code)' if 'CLAUDE_CONFIG_DIR' in os.environ else 'codex-cli 0.159.3')
+            sys.exit(0)
         if 'status' in sys.argv or 'login' in sys.argv:
             print('Fixture account ready')
             sys.exit(0)
+        if os.environ.get('HOST_TEST_LAUNCH_CAPTURE'):
+            with open(os.environ['HOST_TEST_LAUNCH_CAPTURE'], 'a') as f:
+                f.write(json.dumps({'arguments': sys.argv[1:], 'cwd': os.getcwd()}) + '\n')
         tty.setraw(0)
         claude = 'CLAUDE_CONFIG_DIR' in os.environ
         rule = '─' * 60
