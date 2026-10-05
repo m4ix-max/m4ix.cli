@@ -76,7 +76,7 @@ final class ProjectToolsLayoutTests: XCTestCase {
         }
     }
 
-    func testSideBySideWorkspaceGivesEachProviderATerminalAndComposer() async throws {
+    func testSideBySideChatKeepsEachProviderTerminalMountedWithoutTakingFocus() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -145,8 +145,8 @@ final class ProjectToolsLayoutTests: XCTestCase {
         let shown = decks(in: view)
         XCTAssertEqual(shown.count, 2)
         XCTAssertTrue(visible.allSatisfy { session in shown.contains { session.terminal.superview === $0 } })
-        // Only the pane with the keyboard may take it for a question or prompt.
-        XCTAssertEqual(shown.filter(\.takesAutomaticFocus).map(\.agent), [.claude])
+        // The mounted terminals keep both CLIs running while chat owns input.
+        XCTAssertTrue(shown.allSatisfy { !$0.takesAutomaticFocus })
         for (name, size) in [("split-workspace", view.frame.size), ("split-workspace-minimum", NSSize(width: 960, height: 600))] {
             window.setContentSize(size)
             view.frame = NSRect(origin: .zero, size: size)

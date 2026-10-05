@@ -127,12 +127,23 @@ enum CLIPrompt {
     /// and confirmation prompts. The signature lets focus move once per
     /// question without pulling readers back down on every scroll event.
     static func terminalResponseRequest(screen: [String], agent: Agent) -> String? {
+        if agent == .codex, let footer = codexQuestionFooter(in: screen) {
+            return footer.signature
+        }
         let rows = screen.map { $0.trimmingCharacters(in: .whitespaces) }
         let nonempty = rows.indices.filter { !rows[$0].isEmpty }
         guard let last = nonempty.last else { return nil }
         let inputRow = rawInputStartRow(screen: screen, agent: agent)
         let afterInput = inputRow ?? -1
         var requestRow: Int?
+
+        if agent == .codex {
+            let footer = nonempty.suffix(5).map { rows[$0] }.joined(separator: " ").lowercased()
+            if footer.contains("to submit"), footer.contains("to cancel"),
+               footer.contains("change field") || footer.contains("navigate fields") {
+                requestRow = nonempty.suffix(5).first(where: { $0 > afterInput })
+            }
+        }
 
         if let selected = nonempty.last(where: {
             rows[$0].range(of: #"^[❯›▶>]\s*\d+[.)]\s+"#, options: .regularExpression) != nil
@@ -164,6 +175,30 @@ enum CLIPrompt {
         }
         guard let requestRow else { return nil }
         return rows[max(0, requestRow - 2)...last].joined(separator: "\n")
+    }
+
+    /// Codex queues asynchronous questions above its normal input. Unlike
+    /// an approval menu, that input remains visible until the form is opened.
+    static func codexQuestionOpenBytes(in screen: [String]) -> [UInt8]? {
+        codexQuestionFooter(in: screen)?.openBytes
+    }
+
+    private static func codexQuestionFooter(in screen: [String]) -> (signature: String, openBytes: [UInt8])? {
+        let rows = screen.map { $0.trimmingCharacters(in: .whitespaces) }
+        let nonempty = rows.indices.filter { !rows[$0].isEmpty }
+        guard let question = nonempty.suffix(12).last(where: {
+            rows[$0].range(of: #"^\?\s+[1-9]\d*\s+questions?$"#, options: .regularExpression) != nil
+        }), let hint = nonempty.first(where: { $0 > question }),
+           rows[hint].range(of: #"^shift\s*\+\s*(?:↵|enter|return|tab|⇥|⇤)\s+to answer$"#,
+                            options: [.regularExpression, .caseInsensitive]) != nil else { return nil }
+        // A footer quoted earlier in the conversation must not reopen a form.
+        if let next = nonempty.first(where: { $0 > hint }), !rows[next].hasPrefix("›") { return nil }
+        let signature = rows[question] + "\n" + rows[hint]
+        if rows[hint].range(of: #"(?:tab|⇥|⇤)"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return (signature, Array("\u{1b}[Z".utf8))
+        }
+        // CSI-u preserves Shift-Return; a plain Return would submit the input.
+        return (signature, Array("\u{1b}[13;2u".utf8))
     }
 
     /// Codex's live process footer, not arbitrary mentions in the conversation.

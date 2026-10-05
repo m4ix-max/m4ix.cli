@@ -1,3 +1,36 @@
+# m4ix.CLI 0.16.2
+
+Orders sidebar conversations by their latest activity and preserves that order
+across restarts. Reading an older conversation keeps its place; sending a new
+message moves it to the top.
+
+Codex's queued questions reveal the terminal with an Open questions button.
+The answer form stays visible until submitted or cancelled, then returns to
+chat with the unsent message draft intact.
+
+# m4ix.CLI 0.16.1
+
+Website URLs and Markdown web links in conversations and Shared chat open in
+Safari by default. File and email links use their usual apps; website links
+fall back to the system browser when Safari is unavailable.
+
+# m4ix.CLI 0.16.0
+
+Shows normal Claude and Codex conversations in a chat view with selectable
+messages, clickable website and Markdown links, and copyable code blocks.
+Shared chat uses the same link support. Existing provider transcripts supply
+the messages without a second history database.
+
+Terminal controls remain available with the keyboard button or Command Shift T.
+Login and approval requests show the terminal automatically; the chat returns
+when the request is answered.
+
+# m4ix.CLI 0.15.2
+
+Renames the sidebar's Live section to History and removes the separate Saved
+conversation list. Session restoration and provider conversation files are
+preserved.
+
 # m4ix.CLI 0.15.0
 
 Adds Shared chat: you, Claude, and Codex in one discussion, with each agent

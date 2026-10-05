@@ -168,6 +168,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     let terminal: TrackedTerminalView
     let profileDirectory: URL
 
+    @Published private(set) var conversationUpdatedAt: Date
     @Published private(set) var displayTitle: String
     @Published private(set) var state: TerminalState = .idle
     @Published private(set) var accountStatus = "Checking account"
@@ -181,10 +182,13 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// Whether the CLI's own input line holds the screen, so the prompt
     /// bar can type into it. Refreshed once a second while shown.
     @Published private(set) var acceptsPromptText = false
+    @Published private(set) var terminalResponseRequest: String?
+    @Published private(set) var hasQueuedQuestions = false
     @Published private(set) var backgroundTerminalCount = 0
     @Published var compatibility = ProviderCompatibility.checking
     @Published var baselineMessage: String?
     var onPromptDelivered: (() -> Void)?
+    var onConversationActivity: (() -> Void)?
     var onCodexIdentityPrefix: (() -> Void)?
     var onStateExit: (() -> Void)?
     /// The last moment this session was on screen in the active app.
@@ -199,13 +203,15 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     private var promptTask: Task<Void, Never>?
 
     init(agent: Agent, projectPath: String, title: String, initialPrompt: String? = nil,
-         pendingResumeID: String? = nil, profileBase: URL = HostPaths.profileBase, profileID: String = "default") {
+         pendingResumeID: String? = nil, profileBase: URL = HostPaths.profileBase, profileID: String = "default",
+         updatedAt: Date? = nil) {
         self.agent = agent
         self.profileID = profileID
         self.projectPath = projectPath
         self.displayTitle = title
         self.initialPrompt = initialPrompt
         self.pendingResumeID = pendingResumeID?.lowercased()
+        self.conversationUpdatedAt = updatedAt ?? (pendingResumeID == nil ? startedAt : .distantPast)
         self.profileDirectory = profileBase.appendingPathComponent(agent.rawValue, isDirectory: true)
         self.terminal = TrackedTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 520))
         super.init()
@@ -292,7 +298,12 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     func refreshPromptReadiness() {
         let wasReady = acceptsPromptText
         let ready = screenAcceptsText()
-        let count = agent == .codex ? CLIPrompt.backgroundTerminalCount(in: CLIPrompt.liveScreen(of: terminal)) : 0
+        let screen = CLIPrompt.liveScreen(of: terminal)
+        let request = state.isRunning ? CLIPrompt.terminalResponseRequest(screen: screen, agent: agent) : nil
+        if terminalResponseRequest != request { terminalResponseRequest = request }
+        let queuedQuestions = state.isRunning && agent == .codex && CLIPrompt.codexQuestionOpenBytes(in: screen) != nil
+        if hasQueuedQuestions != queuedQuestions { hasQueuedQuestions = queuedQuestions }
+        let count = agent == .codex ? CLIPrompt.backgroundTerminalCount(in: screen) : 0
         if backgroundTerminalCount != count { backgroundTerminalCount = count }
         if acceptsPromptText != ready { acceptsPromptText = ready }
         if wasReady, ready, !isSendingPrompt, let queued = queuedPrompt {
@@ -303,6 +314,15 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
                 promptRecovery = PromptRecovery(text: queued.text, images: queued.images)
             }
         }
+    }
+
+    /// Opens Codex's question form. This shortcut never submits an answer.
+    func openQueuedQuestions() {
+        guard state.isRunning, agent == .codex,
+              let bytes = CLIPrompt.codexQuestionOpenBytes(in: CLIPrompt.liveScreen(of: terminal)) else { return }
+        terminal.scroll(toPosition: 1)
+        terminal.send(data: bytes[...])
+        terminal.window?.makeFirstResponder(terminal)
     }
 
     /// Types `text` and any images into the CLI's prompt, then submits it.
@@ -319,6 +339,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
             guard let self else { return }
             defer { self.isSendingPrompt = false; self.promptTask = nil }
             if await self.type(text, images: images, bracketed: bracketed) {
+                self.recordConversationActivity(at: Date())
                 self.promptRecovery = nil
                 self.onPromptDelivered?()
             } else {
@@ -413,6 +434,21 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
 
     func updateTitle(_ title: String) {
         displayTitle = title
+    }
+
+    func recordConversationActivity(at date: Date) {
+        guard date > conversationUpdatedAt else { return }
+        conversationUpdatedAt = date
+        onConversationActivity?()
+    }
+
+    static func conversationComesBefore(_ lhs: TerminalSession, _ rhs: TerminalSession) -> Bool {
+        if lhs.conversationUpdatedAt != rhs.conversationUpdatedAt {
+            return lhs.conversationUpdatedAt > rhs.conversationUpdatedAt
+        }
+        let left = lhs.agent.rawValue + ":" + (lhs.activeConversationID ?? lhs.pendingResumeID ?? lhs.id.uuidString)
+        let right = rhs.agent.rawValue + ":" + (rhs.activeConversationID ?? rhs.pendingResumeID ?? rhs.id.uuidString)
+        return left < right
     }
 
     func markQueued() { state = .queued }
@@ -540,6 +576,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         if let queuedPrompt { promptRecovery = PromptRecovery(text: queuedPrompt.text, images: queuedPrompt.images) }
         queuedPrompt = nil
         acceptsPromptText = false
+        terminalResponseRequest = nil
         turns.reset()
         isWorking = false
         hideCaret()
@@ -622,20 +659,25 @@ final class ProjectWorkspace {
     }
 
     @discardableResult
-    func createConversation(for agent: Agent, title: String, initialPrompt: String? = nil) -> TerminalSession {
+    func createConversation(for agent: Agent, title: String, initialPrompt: String? = nil, updatedAt: Date? = nil) -> TerminalSession {
         let session = TerminalSession(agent: agent, projectPath: standbySession(for: agent).projectPath,
-                                      title: title, initialPrompt: initialPrompt, profileBase: profileBase, profileID: profileID)
+                                      title: title, initialPrompt: initialPrompt, profileBase: profileBase, profileID: profileID,
+                                      updatedAt: updatedAt)
         live[agent, default: []].insert(session, at: 0)
         selectedSessionIDs[agent] = session.id
         return session
     }
 
-    func restoreConversation(for agent: Agent, title: String, conversationID: String, selected: Bool) {
-        guard liveSession(for: agent, conversationID: conversationID) == nil else { return }
+    @discardableResult
+    func restoreConversation(for agent: Agent, title: String, conversationID: String, selected: Bool,
+                             updatedAt: Date? = nil) -> TerminalSession {
+        if let existing = liveSession(for: agent, conversationID: conversationID) { return existing }
         let session = TerminalSession(agent: agent, projectPath: standbySession(for: agent).projectPath,
-                                      title: title, pendingResumeID: conversationID, profileBase: profileBase, profileID: profileID)
+                                      title: title, pendingResumeID: conversationID, profileBase: profileBase, profileID: profileID,
+                                      updatedAt: updatedAt)
         live[agent, default: []].append(session)
         if selected { selectedSessionIDs[agent] = session.id }
+        return session
     }
 
     func isSelected(_ session: TerminalSession, for agent: Agent) -> Bool {
@@ -679,10 +721,10 @@ final class ProjectWorkspace {
                    let match = CodexSessionIdentity.uniqueMatch(prefix: prefix, in: relevant.map(\.sessionID)) {
                     session.bindConversationID(match)
                 }
-                if let id = session.activeConversationID,
-                   let record = relevant.first(where: { $0.sessionID.caseInsensitiveCompare(id) == .orderedSame }),
-                   !record.title.isEmpty {
-                    session.updateTitle(record.title)
+                if let id = session.activeConversationID ?? session.pendingResumeID,
+                   let record = relevant.first(where: { $0.sessionID.caseInsensitiveCompare(id) == .orderedSame }) {
+                    if !record.title.isEmpty { session.updateTitle(record.title) }
+                    session.recordConversationActivity(at: record.updatedAt)
                 }
             }
         }
@@ -879,6 +921,7 @@ final class HostModel: ObservableObject {
 
     private func observe(_ sessions: [TerminalSession]) {
         for session in sessions {
+            session.onConversationActivity = { [weak self] in self?.sessionRevision += 1 }
             session.onStateExit = { [weak self] in
                 self?.sessionRevision += 1
                 self?.drainLaunchQueue()
@@ -896,7 +939,9 @@ final class HostModel: ObservableObject {
         sessionRevision += 1
     }
 
-    var allLiveSessions: [TerminalSession] { workspaces.values.flatMap(\.allLiveSessions).sorted { $0.startedAt > $1.startedAt } }
+    var allLiveSessions: [TerminalSession] {
+        workspaces.values.flatMap(\.allLiveSessions).sorted(by: TerminalSession.conversationComesBefore)
+    }
     var queuedSessions: [TerminalSession] { allLiveSessions.filter { $0.state == .queued } }
     var activeSessionCount: Int { workspaces.values.flatMap(\.allSessions).filter { $0.state.isRunning }.count }
 
@@ -910,7 +955,7 @@ final class HostModel: ObservableObject {
     var isCurrentProjectAvailable: Bool { ProjectRecord(path: workingDirectory.path).isAvailable }
 
     func liveSessionsForCurrentProject() -> [TerminalSession] {
-        currentWorkspace.allLiveSessions.sorted { $0.startedAt > $1.startedAt }
+        currentWorkspace.allLiveSessions.sorted(by: TerminalSession.conversationComesBefore)
     }
 
     /// On screen, in either pane.
@@ -960,6 +1005,7 @@ final class HostModel: ObservableObject {
                         "agent": agent.rawValue,
                         "conversation": id,
                         "title": session.displayTitle,
+                        "updatedAt": session.conversationUpdatedAt.timeIntervalSince1970,
                         "selected": workspace.isSelected(session, for: agent)
                     ])
                 }
@@ -979,12 +1025,14 @@ final class HostModel: ObservableObject {
                   let id = entry["conversation"] as? String,
                   UUID(uuidString: id) != nil,
                   ProjectRecord(path: path).isAvailable else { continue }
-            workspace(for: path, profileID: profile).restoreConversation(
+            let session = workspace(for: path, profileID: profile).restoreConversation(
                 for: agent,
                 title: entry["title"] as? String ?? "Restored conversation",
                 conversationID: id,
-                selected: entry["selected"] as? Bool ?? false
+                selected: entry["selected"] as? Bool ?? false,
+                updatedAt: (entry["updatedAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
             )
+            observe([session])
             restored += 1
         }
         if restored > 0 {
@@ -1270,7 +1318,8 @@ final class HostModel: ObservableObject {
             selectLiveSession(running)
             return
         }
-        let session = currentWorkspace.createConversation(for: selected, title: record.title)
+        let session = currentWorkspace.createConversation(for: selected, title: record.title, updatedAt: record.updatedAt)
+        observe([session])
         sessionRevision += 1
         enqueue(session, action: .resume, conversationID: record.sessionID)
         saveRestorableSessions()
@@ -1692,7 +1741,7 @@ final class TerminalDeckView: NSView {
     }
 }
 
-private struct TerminalDeck: NSViewRepresentable {
+struct TerminalDeck: NSViewRepresentable {
     let terminal: LocalProcessTerminalView
     let agent: Agent
     let hidesPrompt: Bool
@@ -2027,7 +2076,7 @@ private struct WorkspaceBar: View {
                 Toggle("Claude and Codex side by side", isOn: $model.isSplit)
                 Button("Shared chat with Claude and Codex…", action: onSharedChat)
                     .disabled(!model.isCurrentProjectAvailable)
-                Toggle("Show CLI input and status", isOn: showCLIInput)
+                Toggle("Show terminal instead of chat", isOn: showCLIInput)
                 Button("Focus terminal controls", action: onTerminal)
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                 Divider()
@@ -2151,7 +2200,6 @@ private struct ProjectSidebar: View {
     let onSelectSession: (TerminalSession) -> Void
     let onStopSession: (TerminalSession) -> Void
     let onRemoveSession: (TerminalSession) -> Void
-    let onOpenConversation: (ConversationRecord) -> Void
 
     @State private var searchText = ""
 
@@ -2159,16 +2207,6 @@ private struct ProjectSidebar: View {
         let sessions = model.liveSessionsForCurrentProject()
         guard !searchText.isEmpty else { return sessions }
         return sessions.filter { $0.displayTitle.localizedCaseInsensitiveContains(searchText) }
-    }
-
-    private var visibleConversations: [ConversationRecord] {
-        let runningIDs = Set(model.liveSessionsForCurrentProject().compactMap { session in
-            session.restorableConversationID.map { session.agent.rawValue + ":" + $0.lowercased() }
-        })
-        let records = model.conversationsForCurrentProject()
-            .filter { !runningIDs.contains($0.id.lowercased()) }
-        guard !searchText.isEmpty else { return records }
-        return records.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
     }
 
     var body: some View {
@@ -2255,7 +2293,7 @@ private struct ProjectSidebar: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if !visibleLiveSessions.isEmpty {
-                        sectionLabel("LIVE")
+                        sectionLabel("HISTORY")
                             .padding(.horizontal, ElevateTheme.spacing8)
                             .padding(.top, ElevateTheme.spacing8)
                             .padding(.bottom, ElevateTheme.spacing8)
@@ -2270,14 +2308,7 @@ private struct ProjectSidebar: View {
                             )
                         }
                     }
-                    if !visibleConversations.isEmpty {
-                        sectionLabel("SAVED")
-                            .padding(.horizontal, ElevateTheme.spacing8)
-                            .padding(.top, ElevateTheme.spacing16)
-                            .padding(.bottom, ElevateTheme.spacing8)
-                        ForEach(visibleConversations) { record in conversationRow(record) }
-                    }
-                    if visibleLiveSessions.isEmpty && visibleConversations.isEmpty {
+                    if visibleLiveSessions.isEmpty {
                         VStack(alignment: .leading, spacing: ElevateTheme.spacing8) {
                             Text(searchText.isEmpty ? "No conversations yet" : "No matches")
                                 .font(ElevateTheme.serif(16))
@@ -2352,34 +2383,6 @@ private struct ProjectSidebar: View {
                 .disabled(!model.canRemoveProject(project))
         }
     }
-
-    private func conversationRow(_ record: ConversationRecord) -> some View {
-        Button { onOpenConversation(record) } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(record.title)
-                    .font(ElevateTheme.serif(15))
-                    .foregroundStyle(ElevateTheme.ink)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(record.updatedAt.formatted(.dateTime.month(.abbreviated).day().year()).uppercased())
-                    .font(ElevateTheme.utility(10))
-                    .tracking(0.2)
-                    .foregroundStyle(ElevateTheme.graphite)
-            }
-            .padding(.horizontal, ElevateTheme.spacing8)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(ElevateTheme.borderSubtle).frame(height: ElevateTheme.hairlineWidth)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(ElevateHoverButtonStyle())
-        .help(record.title)
-        .accessibilityLabel("\(record.title), \(record.updatedAt.formatted(date: .abbreviated, time: .omitted))")
-        .accessibilityHint("Resume saved \(model.selected.title) conversation")
-        .disabled(!model.isCurrentProjectAvailable)
-    }
 }
 
 private struct LiveConversationRow: View {
@@ -2444,7 +2447,7 @@ private struct LiveConversationRow: View {
                 Button("Stopping…") {}
                     .disabled(true)
             } else {
-                Button("Remove from live list", action: onRemove)
+                Button("Remove from history", action: onRemove)
             }
             if let initialPrompt = session.initialPrompt {
                 Button("Copy original task") {
@@ -2465,8 +2468,6 @@ struct HostView: View {
     @State private var sidebarVisible = true
     @State private var showingStopConfirmation = false
     @State private var pendingStopSession: TerminalSession?
-    @State private var showingCodexIdentityConfirmation = false
-    @State private var pendingSavedConversation: ConversationRecord?
     @State private var taskDrafts: [String: String] = [:]
     @State private var imageDrafts: [String: [PromptImage]] = [:]
     @State private var showCLIInput = false
@@ -2521,8 +2522,7 @@ struct HostView: View {
                     model: model,
                     onSelectSession: model.selectLiveSession,
                     onStopSession: requestStopSession,
-                    onRemoveSession: model.removeLiveSession,
-                    onOpenConversation: requestOpenConversation
+                    onRemoveSession: model.removeLiveSession
                 )
             }
             VStack(spacing: 0) {
@@ -2641,16 +2641,7 @@ struct HostView: View {
             }
             Button("Keep running", role: .cancel) { pendingStopSession = nil }
         } message: {
-            Text("The CLI will stop. You can still view this terminal until you remove it from the live list.")
-        }
-        .confirmationDialog("Open another Codex session?", isPresented: $showingCodexIdentityConfirmation) {
-            Button("Open saved conversation") {
-                if let pendingSavedConversation { model.openConversation(pendingSavedConversation) }
-                pendingSavedConversation = nil
-            }
-            Button("Cancel", role: .cancel) { pendingSavedConversation = nil }
-        } message: {
-            Text("A live Codex session has not reported its conversation ID yet. Select its Live row to return to it, or open this saved conversation separately.")
+            Text("The CLI will stop. You can still view this terminal until you remove it from history.")
         }
         .onAppear {
             guard !hasStarted else { return }
@@ -2733,7 +2724,7 @@ struct HostView: View {
         requestPromptFocus()
     }
 
-    /// One provider's terminal and composer. Side by side, each pane keeps
+    /// One provider's conversation and composer. Side by side, each pane keeps
     /// its own draft, dictation, dropped images, and keyboard focus.
     @ViewBuilder
     private func sessionPane(_ session: TerminalSession, split: Bool) -> some View {
@@ -2748,31 +2739,18 @@ struct HostView: View {
                 }
                 if !session.compatibility.usesComposer { compatibilityBanner(session) }
             }
-            TerminalDeck(terminal: session.terminal, agent: agent,
-                         hidesPrompt: !(showCLIInput && isActive) && session.compatibility.usesComposer,
-                         takesAutomaticFocus: isActive,
-                         onActivate: { activate(agent) },
-                         onPromptFocus: { activate(agent); requestPromptFocus(agent) }) { images in
+            SessionConversationView(session: session,
+                showTerminal: Binding(get: { showCLIInput && isActive }, set: { activate(agent); showCLIInput = $0 }),
+                isActive: isActive,
+                onActivate: { activate(agent) },
+                onPromptFocus: { activate(agent); requestPromptFocus(agent) },
+                onTerminal: { focusTerminal(for: agent) }) { images in
                 imageDrafts[key, default: []] += images
                 persistDraft(key: key, session: session)
                 requestPromptFocus(agent)
             }
+                .id(key)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay {
-                    if session.state == .idle, session.pendingResumeID == nil {
-                        VStack(spacing: 12) {
-                            PixelMark(sprite: agent.mark, color: ElevateTheme.ash)
-                            Text("New conversation")
-                                .font(ElevateTheme.serif(24))
-                                .foregroundStyle(Color(nsColor: ElevateTheme.terminalForeground))
-                            Text("Write below, or choose a saved conversation.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(ElevateTheme.ash)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color(nsColor: ElevateTheme.terminalBackground))
-                    }
-                }
             PromptBar(
                 session: session,
                 dictation: dictation,
@@ -2853,22 +2831,15 @@ struct HostView: View {
             model.selected = agent
         }
         showCLIInput = true
-        let terminal = model.currentWorkspace.session(for: agent).terminal
+        let session = model.currentWorkspace.session(for: agent)
+        session.openQueuedQuestions()
+        let terminal = session.terminal
         DispatchQueue.main.async { terminal.window?.makeFirstResponder(terminal) }
     }
 
     private func requestStopSession(_ session: TerminalSession) {
         pendingStopSession = session
         showingStopConfirmation = true
-    }
-
-    private func requestOpenConversation(_ record: ConversationRecord) {
-        if model.hasUnidentifiedRunningCodexSession() {
-            pendingSavedConversation = record
-            showingCodexIdentityConfirmation = true
-        } else {
-            model.openConversation(record)
-        }
     }
 }
 

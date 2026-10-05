@@ -115,6 +115,7 @@ final class HostedSessionTests: XCTestCase {
             let id = agent == .claude ? UUID().uuidString : nil
             session.launch(.run, in: root, sessionID: id)
             try await waitUntil { session.refreshPromptReadiness(); return session.acceptsPromptText }
+            let activityBeforeSend = session.conversationUpdatedAt
             XCTAssertTrue(session.sendPrompt("first café\nsecond line"))
             XCTAssertFalse(session.sendPrompt("must not overlap"))
             try await waitUntil { FileManager.default.fileExists(atPath: capture.path) }
@@ -123,6 +124,8 @@ final class HostedSessionTests: XCTestCase {
             XCTAssertEqual(records.count, 1)
             let record = try JSONSerialization.jsonObject(with: Data(records[0].utf8)) as? [String: String]
             XCTAssertEqual(record?["prompt"], "first café\nsecond line")
+            XCTAssertGreaterThan(session.conversationUpdatedAt, activityBeforeSend,
+                                 "Successful message delivery must update conversation order immediately")
             session.stop()
             try await waitUntil { !session.state.isRunning }
             XCTAssertFalse(session.acceptsPromptText)

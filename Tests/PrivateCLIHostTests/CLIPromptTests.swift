@@ -3,6 +3,27 @@ import XCTest
 @testable import PrivateCLIHost
 
 final class CLIPromptTests: XCTestCase {
+    func testQueuedCodexQuestionsRevealTheTerminalAndBlockPromptSubmission() {
+        for shortcut in ["shift+↵", "shift+enter", "shift+tab"] {
+            let screen = ["• Queued follow-up inputs", "  ? 1 question", "    \(shortcut) to answer",
+                          "", "› Ask Codex", "Model · path"]
+            XCTAssertNotNil(CLIPrompt.terminalResponseRequest(screen: screen, agent: .codex))
+            XCTAssertNil(CLIPrompt.inputStartRow(screen: screen, agent: .codex))
+            XCTAssertFalse(CLIPrompt.codexAcceptsText(screen: screen))
+            XCTAssertNil(CLIPrompt.terminalResponseRequest(screen: screen, agent: .claude))
+        }
+        let earlier = ["• Queued follow-up inputs", "  ? 1 question", "    shift+↵ to answer",
+                       "• That question has been answered.", "› Ask Codex", "Model · path"]
+        XCTAssertNil(CLIPrompt.terminalResponseRequest(screen: earlier, agent: .codex))
+        XCTAssertTrue(CLIPrompt.codexAcceptsText(screen: earlier))
+        XCTAssertNil(CLIPrompt.terminalResponseRequest(screen: ["? 0 questions", "shift+↵ to answer"], agent: .codex))
+        let form = ["Where is the order wrong?", "› Messages inside a chat", "",
+                    "ctrl+s to submit · tab change field · ↑↓ to navigate fields · esc to cancel"]
+        XCTAssertNotNil(CLIPrompt.terminalResponseRequest(screen: form, agent: .codex))
+        XCTAssertNotNil(CLIPrompt.terminalResponseRequest(screen: form + Array(repeating: "", count: 20), agent: .codex))
+        XCTAssertFalse(CLIPrompt.codexAcceptsText(screen: form), "The open form must stay visible until answered")
+    }
+
     func testConcealedInputLeavesApprovalsAndUnrecognizedOutputVisible() {
         XCTAssertEqual(CLIPrompt.inputStartRow(screen: ["Result", "", "› Ask Codex", "Model · path"], agent: .codex), 1)
         XCTAssertNil(CLIPrompt.inputStartRow(screen: ["Approve?", "› 1. Allow", "  2. Deny"], agent: .codex))

@@ -49,7 +49,7 @@ struct SharedChatView: View {
                         } else if !chat.partialReply.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Unfinished reply · not shared").font(.caption).foregroundStyle(ElevateTheme.graphite)
-                                Text(chat.partialReply).textSelection(.enabled)
+                                ChatMessageBody(text: chat.partialReply)
                             }
                         }
                         Color.clear.frame(height: 1).id("latest")
@@ -127,7 +127,7 @@ struct SharedChatView: View {
                 if let status { Text(status).font(.caption).foregroundStyle(ElevateTheme.graphite) }
             }
             if text.isEmpty { ProgressView().controlSize(.small) }
-            else { Text(text).font(.system(size: 14)).textSelection(.enabled).lineSpacing(4) }
+            else { ChatMessageBody(text: text, markdown: speaker != "you") }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
