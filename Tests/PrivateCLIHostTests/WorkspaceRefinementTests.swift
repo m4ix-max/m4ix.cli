@@ -24,6 +24,38 @@ final class WorkspaceRefinementTests: XCTestCase {
         XCTAssertFalse(window.firstResponder === text)
     }
 
+    func testBundledFacesLoadWithTheirWeightsAndOpticalSizes() throws {
+        // Core Text reports only the axes moved off their defaults, so start
+        // from each axis's default value.
+        func axes(_ font: NSFont) -> [String: Double] {
+            var values: [UInt32: Double] = [:]
+            for axis in CTFontCopyVariationAxes(font as CTFont) as? [[String: Any]] ?? [] {
+                if let id = axis[kCTFontVariationAxisIdentifierKey as String] as? NSNumber,
+                   let value = axis[kCTFontVariationAxisDefaultValueKey as String] as? NSNumber {
+                    values[id.uint32Value] = value.doubleValue
+                }
+            }
+            for (key, value) in CTFontCopyVariation(font as CTFont) as? [NSNumber: NSNumber] ?? [:] {
+                values[key.uint32Value] = value.doubleValue
+            }
+            return Dictionary(uniqueKeysWithValues: values.map { code, value in
+                (String(bytes: [24, 16, 8, 0].map { UInt8((code >> $0) & 0xFF) }, encoding: .ascii) ?? "?", value)
+            })
+        }
+        let title = ElevateTheme.serifNS(28)
+        let sidebar = ElevateTheme.serifNS(13)
+        XCTAssertEqual(title.familyName, "Newsreader")
+        XCTAssertEqual(axes(title)["opsz"], 28)
+        XCTAssertEqual(axes(sidebar)["opsz"], 13)
+        XCTAssertEqual(axes(title)["wght"], 400)
+
+        let label = ElevateTheme.utilityNS(10)
+        let control = ElevateTheme.utilityNS(12, medium: true)
+        XCTAssertEqual(label.familyName, "Chivo Mono")
+        XCTAssertEqual(axes(label)["wght"], 400)
+        XCTAssertEqual(axes(control)["wght"], 500)
+    }
+
     func testComposerRendersDraftAndTerminalQuestionAtNarrowWidth() async throws {
         let suite = "m4ix.cli.composer." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

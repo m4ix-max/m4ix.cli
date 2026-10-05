@@ -1820,7 +1820,7 @@ private struct PaneHeader: View {
                 Spacer(minLength: ElevateTheme.spacing8)
                 Text(status)
                     .font(ElevateTheme.utility(10))
-                    .tracking(0.3)
+                    .tracking(0.2)
                     .foregroundStyle(ElevateTheme.graphite)
                     .fixedSize()
             }
@@ -2176,7 +2176,8 @@ private struct ProjectSidebar: View {
             HStack(spacing: 0) {
                 Text("m4ix.CLI")
                     .font(ElevateTheme.utility(14, medium: true))
-                    .tracking(0.42)
+                    .tracking(0.28)
+                    .textCase(.uppercase)
                     .foregroundStyle(ElevateTheme.ink)
                 Spacer()
             }
@@ -2308,7 +2309,7 @@ private struct ProjectSidebar: View {
     private func sectionLabel(_ title: String) -> some View {
         Text(title)
             .font(ElevateTheme.utility(11, medium: true))
-            .tracking(0.33)
+            .tracking(0.22)
             .foregroundStyle(ElevateTheme.graphite)
     }
 
@@ -2362,7 +2363,7 @@ private struct ProjectSidebar: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text(record.updatedAt.formatted(.dateTime.month(.abbreviated).day().year()).uppercased())
                     .font(ElevateTheme.utility(10))
-                    .tracking(0.3)
+                    .tracking(0.2)
                     .foregroundStyle(ElevateTheme.graphite)
             }
             .padding(.horizontal, ElevateTheme.spacing8)
@@ -2383,7 +2384,7 @@ private struct ProjectSidebar: View {
 
 private struct LiveConversationRow: View {
     private var status: String {
-        if session.pendingResumeID != nil { return "RESTORED · SELECT TO RESUME" }
+        if session.pendingResumeID != nil { return "RESTORED" }
         if attentionMessage != nil { return "YOUR TURN" }
         guard case .running = session.state else { return session.state.description.uppercased() }
         return session.isWorking ? "WORKING" : "WAITING"
@@ -2412,7 +2413,7 @@ private struct LiveConversationRow: View {
                     if attentionMessage != nil { AttentionPixel() }
                     Text("\(session.agent.title.uppercased()) · \(status)")
                         .font(ElevateTheme.utility(10, medium: attentionMessage != nil))
-                        .tracking(0.3)
+                        .tracking(0.2)
                         .foregroundStyle(attentionMessage != nil ? ElevateTheme.ink : ElevateTheme.graphite)
                         .fixedSize(horizontal: false, vertical: true)
                 }

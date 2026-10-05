@@ -20,7 +20,7 @@ let package = Package(
             path: ".",
             exclude: ["Packaging", "README.md", "ROADMAP.md", "LICENSE", "Tests", "Tools", "outputs", "versions"],
             sources: ["Sources/PrivateCLIHost"],
-            resources: [.copy("Resources/agent-launcher.sh"), .copy("Resources/app-update.sh")],
+            resources: [.copy("Resources/agent-launcher.sh"), .copy("Resources/app-update.sh"), .copy("Resources/Fonts")],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .testTarget(

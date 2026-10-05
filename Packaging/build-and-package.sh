@@ -75,11 +75,15 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 STAGED_APP="$STAGING_DIR/$APP_NAME $APP_VERSION.app"
 MACOS_DIR="$STAGED_APP/Contents/MacOS"
 RESOURCES_DIR="$STAGED_APP/Contents/Resources"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/Licenses"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/Licenses" "$RESOURCES_DIR/Fonts"
 install -m 755 "$BUILT_EXECUTABLE" "$MACOS_DIR/$EXECUTABLE"
 install -m 755 "$LAUNCHER" "$RESOURCES_DIR/agent-launcher.sh"
 install -m 644 "$LICENSE_SOURCE" "$RESOURCES_DIR/Licenses/SwiftTerm-LICENSE.txt"
 install -m 644 "$PROJECT_DIR/LICENSE" "$RESOURCES_DIR/Licenses/m4ix.CLI-LICENSE.txt"
+for face in Newsreader ChivoMono; do
+    install -m 644 "$PROJECT_DIR/Resources/Fonts/$face.ttf" "$RESOURCES_DIR/Fonts/$face.ttf"
+    install -m 644 "$PROJECT_DIR/Resources/Fonts/$face-OFL.txt" "$RESOURCES_DIR/Licenses/$face-OFL.txt"
+done
 
 # Preserve any SwiftPM resource bundles in the app's standard resource directory.
 for resource_bundle in "$BIN_DIR"/*.bundle; do
