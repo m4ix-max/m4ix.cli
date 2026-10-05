@@ -12,7 +12,8 @@ final class RealCLISmokeTests: XCTestCase {
         }
         let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         for agent in Agent.allCases {
-            let session = TerminalSession(agent: agent, projectPath: directory.path, title: "Runtime verification")
+            let session = TerminalSession(agent: agent, projectPath: directory.path, title: "Runtime verification",
+                                          profileBase: HostPaths.userDataDirectory)
             session.launch(.run, in: directory, sessionID: agent == .claude ? UUID().uuidString : nil)
             defer { session.stop() }
             let readyDeadline = Date().addingTimeInterval(30)
@@ -41,7 +42,7 @@ final class RealCLISmokeTests: XCTestCase {
             let conversationID: String?
             if agent == .claude { conversationID = session.activeConversationID }
             else {
-                let records = await Task.detached(priority: .utility) { ConversationHistoryLoader.load(profileBase: HostPaths.profileBase) }.value
+                let records = await Task.detached(priority: .utility) { ConversationHistoryLoader.load(profileBase: HostPaths.userDataDirectory) }.value
                 conversationID = session.codexSessionIDPrefix.flatMap { prefix in
                     CodexSessionIdentity.uniqueMatch(prefix: prefix, in: records.filter { $0.provider == "codex" }.map(\.sessionID))
                 }
@@ -51,7 +52,8 @@ final class RealCLISmokeTests: XCTestCase {
             let stopDeadline = Date().addingTimeInterval(6)
             while session.state.isRunning && Date() < stopDeadline { try await Task.sleep(nanoseconds: 100_000_000) }
             XCTAssertFalse(session.state.isRunning)
-            let resumed = TerminalSession(agent: agent, projectPath: directory.path, title: "Restored verification", pendingResumeID: savedID)
+            let resumed = TerminalSession(agent: agent, projectPath: directory.path, title: "Restored verification",
+                                          pendingResumeID: savedID, profileBase: HostPaths.userDataDirectory)
             defer { resumed.stop() }
             resumed.startIfPending()
             try await waitForComposer(resumed)

@@ -24,8 +24,8 @@ case "$agent" in
 esac
 
 case "$action" in
-    run|login|status|resume) ;;
-    *) fail "unknown action: $action (use run, login, status, or resume)" ;;
+    run|login|status|resume|version|discuss) ;;
+    *) fail "unknown action: $action (use run, login, status, resume, version, or discuss)" ;;
 esac
 
 valid_uuid() {
@@ -37,6 +37,14 @@ valid_uuid() {
 # item; the launcher never reconstructs it through a shell command string.
 session_id=''
 case "$agent:$action" in
+    claude:discuss|codex:discuss)
+        [[ $# -le 1 ]] || fail 'discuss accepts only an optional session UUID; send the message on stdin'
+        if [[ $# -eq 1 ]]; then
+            session_id=$1
+            valid_uuid "$session_id" || fail 'discuss requires a valid session UUID'
+            shift
+        fi
+        ;;
     claude:run)
         if [[ $# -gt 0 ]]; then
             [[ "$1" == --session-id ]] ||
@@ -220,7 +228,47 @@ codex_flags=(
     -c 'tui.notification_condition="always"'
 )
 
+# The toolbar's model and effort apply to this session alone. Claude's own
+# /model and /effort commands would save them as the profile's default.
+model=${PRIVATE_CLI_HOST_MODEL:-}
+effort=${PRIVATE_CLI_HOST_EFFORT:-}
+unset PRIVATE_CLI_HOST_MODEL PRIVATE_CLI_HOST_EFFORT
+model_pattern='^[A-Za-z0-9][][A-Za-z0-9._:-]{0,79}$'
+effort_pattern='^[a-z]{1,16}$'
+if [[ "$action" == run || "$action" == resume || "$action" == discuss ]]; then
+    if [[ -n "$model" ]]; then
+        [[ "$model" =~ $model_pattern ]] || fail 'the selected model name is not valid'
+        claude_flags+=(--model "$model")
+        codex_flags+=(-c "model=\"$model\"")
+    fi
+    if [[ -n "$effort" ]]; then
+        [[ "$effort" =~ $effort_pattern ]] || fail 'the selected effort level is not valid'
+        claude_flags+=(--effort "$effort")
+        codex_flags+=(-c "model_reasoning_effort=\"$effort\"")
+    fi
+fi
+
 case "$agent:$action" in
+    claude:discuss)
+        # Shared discussions can inspect the project, but have no write or
+        # command tools. Prompts travel on stdin, never in process arguments.
+        discuss_flags=(--print --output-format stream-json --verbose --include-partial-messages
+            --permission-mode plan --permission-prompts none --tools 'Read,Glob,Grep'
+            --strict-mcp-config --mcp-config '{"mcpServers":{}}')
+        if [[ -n "$session_id" ]]; then discuss_flags+=(--resume "$session_id"); fi
+        exec "$cli" "${claude_flags[@]}" "${discuss_flags[@]}"
+        ;;
+    codex:discuss)
+        # Set the discussion policy explicitly, including when resuming.
+        codex_flags+=(-c 'sandbox_mode="read-only"' -c 'approval_policy="never"')
+        if [[ -n "$session_id" ]]; then
+            exec "$cli" "${codex_flags[@]}" exec resume --json --skip-git-repo-check "$session_id" -
+        fi
+        exec "$cli" "${codex_flags[@]}" exec --json --skip-git-repo-check -
+        ;;
+    claude:version|codex:version)
+        exec "$cli" --version
+        ;;
     claude:run)
         repair_claude_onboarding
         if [[ -n "$session_id" ]]; then

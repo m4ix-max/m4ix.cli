@@ -13,6 +13,22 @@ struct PromptImage: Identifiable, Equatable {
 }
 
 enum PromptImageStore {
+    private static func imageFiles(on pasteboard: NSPasteboard) -> [URL] {
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self],
+                                         options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        if !urls.isEmpty { return urls }
+        // Finder and some image browsers still advertise the older file list.
+        let paths = pasteboard.propertyList(forType: NSPasteboard.PasteboardType("NSFilenamesPboardType")) as? [String] ?? []
+        return paths.map { URL(fileURLWithPath: $0) }
+    }
+
+    static func canPasteImages(from pasteboard: NSPasteboard) -> Bool {
+        let files = imageFiles(on: pasteboard)
+        if !files.isEmpty {
+            return files.contains { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }
+        }
+        return pasteboard.string(forType: .string) == nil && NSImage.canInit(with: pasteboard)
+    }
     static let directory: URL = {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         let owner = Bundle.main.bundleIdentifier ?? "PrivateCLIHost"
@@ -48,8 +64,7 @@ enum PromptImageStore {
     /// that also carries plain text is text, because rich text copied from
     /// other apps often includes a picture of itself.
     static func images(from pasteboard: NSPasteboard, isPaste: Bool, in directory: URL = directory) -> [PromptImage] {
-        let files = pasteboard.readObjects(forClasses: [NSURL.self],
-                                           options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let files = imageFiles(on: pasteboard)
         if !files.isEmpty {
             return files.compactMap { add(fileAt: $0, in: directory) }
         }

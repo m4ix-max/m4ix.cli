@@ -24,32 +24,48 @@ final class WorkspaceRefinementTests: XCTestCase {
         XCTAssertFalse(window.firstResponder === text)
     }
 
-    func testAnimationToolsResolveCurrentProjectBeforePersonalFallback() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let tools = WorkspaceTools(home: directory.appendingPathComponent("home"))
-        XCTAssertNil(tools.root(for: directory))
-        for path in ["annotator/server.js", "annotator/index.html", "motion/index.html"] {
-            let file = directory.appendingPathComponent(path)
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data().write(to: file)
+    func testBundledFacesLoadWithTheirWeightsAndOpticalSizes() throws {
+        // Core Text reports only the axes moved off their defaults, so start
+        // from each axis's default value.
+        func axes(_ font: NSFont) -> [String: Double] {
+            var values: [UInt32: Double] = [:]
+            for axis in CTFontCopyVariationAxes(font as CTFont) as? [[String: Any]] ?? [] {
+                if let id = axis[kCTFontVariationAxisIdentifierKey as String] as? NSNumber,
+                   let value = axis[kCTFontVariationAxisDefaultValueKey as String] as? NSNumber {
+                    values[id.uint32Value] = value.doubleValue
+                }
+            }
+            for (key, value) in CTFontCopyVariation(font as CTFont) as? [NSNumber: NSNumber] ?? [:] {
+                values[key.uint32Value] = value.doubleValue
+            }
+            return Dictionary(uniqueKeysWithValues: values.map { code, value in
+                (String(bytes: [24, 16, 8, 0].map { UInt8((code >> $0) & 0xFF) }, encoding: .ascii) ?? "?", value)
+            })
         }
-        XCTAssertEqual(tools.root(for: directory.appendingPathComponent("motion"))?.path, directory.path)
-        let url = WorkspaceTools.Tool.annotator.url
-        let ok = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
-        let failure = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil))
-        let expected = Data("<title>Annotator</title>".utf8)
-        XCTAssertTrue(WorkspaceTools.isExpectedPage(expected, response: ok, tool: .annotator))
-        XCTAssertFalse(WorkspaceTools.isExpectedPage(expected, response: failure, tool: .annotator))
-        XCTAssertFalse(WorkspaceTools.isExpectedPage(Data("Unrelated service".utf8), response: ok, tool: .annotator))
-        XCTAssertFalse(WorkspaceTools.isExpectedPage(expected, response: ok, tool: .motion))
+        let title = ElevateTheme.serifNS(28)
+        let sidebar = ElevateTheme.serifNS(13)
+        XCTAssertEqual(title.familyName, "Newsreader")
+        XCTAssertEqual(axes(title)["opsz"], 28)
+        XCTAssertEqual(axes(sidebar)["opsz"], 13)
+        XCTAssertEqual(axes(title)["wght"], 400)
+
+        let label = ElevateTheme.utilityNS(10)
+        let control = ElevateTheme.utilityNS(12, medium: true)
+        XCTAssertEqual(label.familyName, "Chivo Mono")
+        XCTAssertEqual(axes(label)["wght"], 400)
+        XCTAssertEqual(axes(control)["wght"], 500)
     }
 
     func testComposerRendersDraftAndTerminalQuestionAtNarrowWidth() async throws {
+        let suite = "m4ix.cli.composer." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let dictation = Dictation(preferences: defaults, bundle: Bundle(for: Self.self))
         for blocked in [false, true] {
             let view = NSHostingView(rootView: PromptComposer(
                 text: .constant("A draft stays here while I answer a question."), images: .constant([]),
                 mode: blocked ? .blocked : .send, agentName: "Codex", projectName: "Motion",
+                dictation: dictation, dictationTarget: "draft",
                 onSubmit: { _, _ in false }))
             view.frame = NSRect(x: 0, y: 0, width: 640, height: 200)
             let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)

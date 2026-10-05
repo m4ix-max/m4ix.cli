@@ -75,11 +75,15 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 STAGED_APP="$STAGING_DIR/$APP_NAME $APP_VERSION.app"
 MACOS_DIR="$STAGED_APP/Contents/MacOS"
 RESOURCES_DIR="$STAGED_APP/Contents/Resources"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/Licenses"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR/Licenses" "$RESOURCES_DIR/Fonts"
 install -m 755 "$BUILT_EXECUTABLE" "$MACOS_DIR/$EXECUTABLE"
 install -m 755 "$LAUNCHER" "$RESOURCES_DIR/agent-launcher.sh"
 install -m 644 "$LICENSE_SOURCE" "$RESOURCES_DIR/Licenses/SwiftTerm-LICENSE.txt"
 install -m 644 "$PROJECT_DIR/LICENSE" "$RESOURCES_DIR/Licenses/m4ix.CLI-LICENSE.txt"
+for face in Newsreader ChivoMono; do
+    install -m 644 "$PROJECT_DIR/Resources/Fonts/$face.ttf" "$RESOURCES_DIR/Fonts/$face.ttf"
+    install -m 644 "$PROJECT_DIR/Resources/Fonts/$face-OFL.txt" "$RESOURCES_DIR/Licenses/$face-OFL.txt"
+done
 
 # Preserve any SwiftPM resource bundles in the app's standard resource directory.
 for resource_bundle in "$BIN_DIR"/*.bundle; do
@@ -105,12 +109,21 @@ cat > "$STAGED_APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSMicrophoneUsageDescription</key><string>m4ix.CLI listens only while you dictate a message. Speech is transcribed on this Mac.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>Dictated messages are transcribed on this Mac.</string>
 </dict>
 </plist>
 PLIST
 
 plutil -replace CFBundleShortVersionString -string "$APP_VERSION" "$STAGED_APP/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$APP_BUILD" "$STAGED_APP/Contents/Info.plist"
+SOURCE_REVISION=$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true)
+if [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+    plutil -insert M4IXSourceRevision -string "$SOURCE_REVISION" "$STAGED_APP/Contents/Info.plist"
+    SOURCE_DIRTY=false
+    if [[ -n $(git -C "$PROJECT_DIR" status --porcelain) ]]; then SOURCE_DIRTY=true; fi
+    plutil -insert M4IXSourceDirty -bool "$SOURCE_DIRTY" "$STAGED_APP/Contents/Info.plist"
+fi
 
 ICONSET="$STAGING_DIR/AppIcon.iconset"
 mkdir -p "$ICONSET"
@@ -138,7 +151,9 @@ fi
 
 plutil -lint "$STAGED_APP/Contents/Info.plist"
 if [[ "$PRODUCTION_BUILD" == true ]]; then
-    codesign --force --sign "$M4IX_SIGNING_IDENTITY" --options runtime --timestamp "$STAGED_APP"
+    # The hardened runtime blocks the microphone unless the entitlement asks for it.
+    codesign --force --sign "$M4IX_SIGNING_IDENTITY" --options runtime --timestamp \
+        --entitlements "$SCRIPT_DIR/m4ix.CLI.entitlements" "$STAGED_APP"
 else
     codesign --force --sign - --timestamp=none "$STAGED_APP"
 fi

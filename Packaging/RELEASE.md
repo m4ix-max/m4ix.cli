@@ -44,8 +44,5 @@ signatures are for local checks only.
    checksum, tested requirements, and release notes. CI build artifacts are
    ad hoc signed and must not be substituted for the production ZIP.
 
-The animation tools are an optional local integration. They are not included
-in this repository or required for Claude and Codex sessions.
-
 Apple's workflow is documented at
 https://developer.apple.com/documentation/security/customizing-the-notarization-workflow.

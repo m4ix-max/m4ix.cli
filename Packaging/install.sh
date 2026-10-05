@@ -1,6 +1,7 @@
 #!/bin/bash
-# Installs a packaged build as /Applications/m4ix.CLI.app, replacing the one
-# there. Takes the build's .app path; without one, the newest in outputs/.
+# Installs a packaged build in ~/Applications by default. M4IX_INSTALL_DIR
+# selects another Applications folder. Previous installations are retained.
+# Takes the build's .app path; without one, the newest in outputs/.
 # build-and-package.sh --install runs this after packaging. Run it by hand to go back
 # to an earlier build.
 
@@ -9,7 +10,10 @@ set -euo pipefail
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 APP_NAME='m4ix.CLI'
-TARGET="/Applications/$APP_NAME.app"
+INSTALL_DIR="${M4IX_INSTALL_DIR:-$HOME/Applications}"
+BACKUPS_DIR="${M4IX_INSTALL_BACKUPS_DIR:-$HOME/Library/Caches/m4ix.cli/install-backups}"
+[[ "$INSTALL_DIR" == /* && "$BACKUPS_DIR" == /* ]] || { printf 'Installation and backup folders must be absolute paths.\n' >&2; exit 1; }
+TARGET="$INSTALL_DIR/$APP_NAME.app"
 
 SOURCE=${1:-}
 if [[ -z "$SOURCE" ]]; then
@@ -20,22 +24,44 @@ fi
     exit 1
 }
 codesign --verify --strict "$SOURCE"
+[[ $(plutil -extract CFBundleIdentifier raw "$SOURCE/Contents/Info.plist") == com.maxblomqvist.privateclis ]] || exit 1
 
 # Swap by rename, never by copying into the installed bundle: macOS kills a
 # running app whose signed executable changes in place, while a renamed and
 # deleted file stays readable to the process that has it open.
-STAGE=$(mktemp -d "/Applications/.$APP_NAME-install.XXXXXXXX")
+mkdir -p "$INSTALL_DIR"
+STAGE=$(mktemp -d "$INSTALL_DIR/.$APP_NAME-install.XXXXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
-ditto "$SOURCE" "$STAGE/$APP_NAME.app"
+if ! ditto "$SOURCE" "$STAGE/$APP_NAME.app"; then
+    # Some command hosts can copy content but cannot preserve extended metadata.
+    rm -rf "$STAGE/$APP_NAME.app"
+    python3 - "$SOURCE" "$STAGE/$APP_NAME.app" <<'PY'
+import os
+import shutil
+import stat
+import sys
+def copy_content(source, destination):
+    shutil.copyfile(source, destination)
+    os.chmod(destination, stat.S_IMODE(os.stat(source).st_mode))
+    return destination
+shutil.copytree(sys.argv[1], sys.argv[2], symlinks=True, copy_function=copy_content)
+PY
+fi
+codesign --verify --strict "$STAGE/$APP_NAME.app"
+BACKUP=''
 if [[ -e "$TARGET" ]]; then
-    mv "$TARGET" "$STAGE/previous.app"
+    [[ -d "$TARGET" && ! -L "$TARGET" ]] || { printf 'Installation target is not an app folder: %s\n' "$TARGET" >&2; exit 1; }
+    codesign --verify --strict "$TARGET"
+    mkdir -p "$BACKUPS_DIR"
+    BACKUP=$(mktemp -d "$BACKUPS_DIR/manual-install.XXXXXXXX")
+    mv "$TARGET" "$BACKUP/$APP_NAME.app"
 fi
-mv "$STAGE/$APP_NAME.app" "$TARGET"
+if ! mv "$STAGE/$APP_NAME.app" "$TARGET"; then
+    if [[ -n "$BACKUP" ]]; then mv "$BACKUP/$APP_NAME.app" "$TARGET"; fi
+    exit 1
+fi
 
-VERSION=$(defaults read "$TARGET/Contents/Info.plist" CFBundleShortVersionString)
+VERSION=$(plutil -extract CFBundleShortVersionString raw "$TARGET/Contents/Info.plist")
 printf 'Installed: %s %s\n' "$TARGET" "$VERSION"
-# pgrep misses the app from some sandboxed shells; ps does not. grep reads
-# all of it, since an early exit would fail the pipeline under pipefail.
-if ps -axo comm= | grep '/PrivateCLIHost$' >/dev/null; then
-    printf 'The app is still running the previous build. Quit and reopen it to use %s.\n' "$VERSION"
-fi
+if [[ -n "$BACKUP" ]]; then printf 'Previous app: %s\n' "$BACKUP/$APP_NAME.app"; fi
+printf 'Quit the running app, then open "%s" to load %s.\n' "$TARGET" "$VERSION"
