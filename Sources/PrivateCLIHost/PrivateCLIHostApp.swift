@@ -1854,7 +1854,6 @@ private struct WorkspaceBar: View {
     let onProductionTools: () -> Void
     let onSharedChat: () -> Void
     let showCLIInput: Binding<Bool>
-    @ObservedObject var tools: WorkspaceTools
     let onTerminal: () -> Void
 
     private var activityTitle: String {
@@ -1983,23 +1982,6 @@ private struct WorkspaceBar: View {
             .accessibilityLabel("Session activity")
             .help("\(model.selected.title) · \(activityTitle)\(session.accountStatus.isEmpty ? "" : " · \(session.accountStatus)")")
             .padding(.trailing, 8)
-
-            if tools.root(for: model.workingDirectory) != nil {
-                Menu {
-                    ForEach(WorkspaceTools.Tool.allCases, id: \.self) { tool in
-                        Button {
-                            Task { await tools.open(tool, project: model.workingDirectory) }
-                        } label: { Label(tool.title, systemImage: tool.symbol) }
-                    }
-                } label: {
-                    Image(systemName: "play.rectangle").font(.system(size: 16)).frame(width: 32, height: 36)
-                }
-                .menuStyle(.borderlessButton)
-                .disabled(tools.opening != nil)
-                .help(tools.opening.map { "Opening \($0.title)…" } ?? "Animation tools")
-                .accessibilityLabel("Animation tools")
-                .padding(.trailing, 8)
-            }
 
             Button(action: onProjectTools) {
                 Image(systemName: "square.stack.3d.up")
@@ -2496,7 +2478,6 @@ struct HostView: View {
     @State private var projectToolsRequest: ProjectToolsRequest?
     @State private var showingProductionTools = false
     @State private var showingSharedChat = false
-    @StateObject private var tools = WorkspaceTools()
     @StateObject private var dictation = Dictation()
 
     init(appDelegate: PrivateCLIAppDelegate) {
@@ -2574,7 +2555,6 @@ struct HostView: View {
                     onProductionTools: { showingProductionTools = true },
                     onSharedChat: { dictation.finish(); showingSharedChat = true },
                     showCLIInput: $showCLIInput,
-                    tools: tools,
                     onTerminal: { focusTerminal() }
                 )
                 if !model.isSplit, !model.currentSession.compatibility.usesComposer {
@@ -2618,12 +2598,6 @@ struct HostView: View {
             .keyboardShortcut("l", modifiers: .command)
             .hidden()
         }
-        .alert("Could not open animation tool", isPresented: Binding(
-            get: { tools.errorMessage != nil },
-            set: { if !$0 { tools.errorMessage = nil } }
-        )) {
-            Button("OK") { tools.errorMessage = nil }
-        } message: { Text(tools.errorMessage ?? "") }
         .frame(minWidth: 960, minHeight: 600)
         .background(ElevateTheme.paper)
         .sheet(item: $projectToolsRequest) { request in
@@ -2714,7 +2688,6 @@ struct HostView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             HostDiagnostics.record("app_quitting")
-            tools.stopOwnedServer()
         }
     }
 

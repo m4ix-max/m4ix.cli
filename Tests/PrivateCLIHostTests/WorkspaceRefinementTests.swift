@@ -24,27 +24,6 @@ final class WorkspaceRefinementTests: XCTestCase {
         XCTAssertFalse(window.firstResponder === text)
     }
 
-    func testAnimationToolsResolveCurrentProjectBeforePersonalFallback() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let tools = WorkspaceTools(home: directory.appendingPathComponent("home"))
-        XCTAssertNil(tools.root(for: directory))
-        for path in ["annotator/server.js", "annotator/index.html", "motion/index.html"] {
-            let file = directory.appendingPathComponent(path)
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data().write(to: file)
-        }
-        XCTAssertEqual(tools.root(for: directory.appendingPathComponent("motion"))?.path, directory.path)
-        let url = WorkspaceTools.Tool.annotator.url
-        let ok = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
-        let failure = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil))
-        let expected = Data("<title>Annotator</title>".utf8)
-        XCTAssertTrue(WorkspaceTools.isExpectedPage(expected, response: ok, tool: .annotator))
-        XCTAssertFalse(WorkspaceTools.isExpectedPage(expected, response: failure, tool: .annotator))
-        XCTAssertFalse(WorkspaceTools.isExpectedPage(Data("Unrelated service".utf8), response: ok, tool: .annotator))
-        XCTAssertFalse(WorkspaceTools.isExpectedPage(expected, response: ok, tool: .motion))
-    }
-
     func testComposerRendersDraftAndTerminalQuestionAtNarrowWidth() async throws {
         let suite = "m4ix.cli.composer." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
