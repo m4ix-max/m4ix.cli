@@ -805,9 +805,6 @@ final class HostModel: ObservableObject {
         return chat
     }
 
-    func flushSharedChats() async {
-        for chat in Array(sharedChats.values) { await chat.flush() }
-    }
     private struct LaunchRequest {
         let session: TerminalSession
         let action: TerminalAction
@@ -1377,7 +1374,7 @@ final class HostModel: ObservableObject {
     }
 
     func flushSharedChats() async {
-        for chat in sharedChats.values { await chat.flush() }
+        for chat in Array(sharedChats.values) { await chat.flush() }
     }
 
     var hasRunningSessions: Bool {
