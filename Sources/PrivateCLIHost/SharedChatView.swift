@@ -3,7 +3,12 @@ import SwiftUI
 
 struct SharedChatView: View {
     @ObservedObject var chat: SharedChat
+    var profileID = "default"
+    var recovery: ProductionCenter? = nil
+    var onStart: ((HandoffDraft, String) async throws -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+    @State private var handoffDraft: HandoffDraft?
+    @State private var handoffStarted = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,7 +41,7 @@ struct SharedChatView: View {
                                     .font(ElevateTheme.serif(23))
                                 Text("Both agents read this discussion and take turns replying. Ask for competing approaches, a critique, or a plan for this project.")
                                 Text("Use @claude or @codex to ask just one. Stop the exchange whenever you want to add your thoughts.")
-                                Text("This room is for discussion and project inspection. Use a terminal conversation to carry out the plan.")
+                                Text("When the plan is ready, choose a provider under Send task to, review the task, then start an implementation conversation.")
                                     .font(.callout).foregroundStyle(ElevateTheme.graphite)
                             }.padding(.vertical, 24)
                         }
@@ -106,6 +111,13 @@ struct SharedChatView: View {
                     }.frame(width: 150).disabled(chat.isRunning)
                     Text("⌘Return to send").font(.caption).foregroundStyle(ElevateTheme.graphite)
                     Spacer()
+                    Menu("Send task to…") {
+                        ForEach(Agent.allCases) { agent in
+                            Button(agent.title) { handoffDraft = chat.handoff(to: agent, profileID: profileID) }
+                        }
+                    }
+                    .disabled(!chat.canHandoff || onStart == nil)
+                    .help("Review a task and discussion context before starting Claude or Codex")
                     Button("Send") { _ = chat.send() }
                         .keyboardShortcut(.return, modifiers: .command)
                         .buttonStyle(.borderedProminent).tint(ElevateTheme.signal)
@@ -117,6 +129,15 @@ struct SharedChatView: View {
         .background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
         .task { await chat.load() }
         .onDisappear { chat.close() }
+        .sheet(item: $handoffDraft, onDismiss: {
+            if handoffStarted { handoffStarted = false; chat.close(); dismiss() }
+        }) { draft in
+            HandoffView(draft: draft, recovery: recovery) { prompt in
+                guard let onStart else { throw CommandError.failed("The implementation session is unavailable.") }
+                try await onStart(draft, prompt)
+                handoffStarted = true
+            }
+        }
     }
 
     private func messageRow(speaker: String, text: String, status: String?) -> some View {

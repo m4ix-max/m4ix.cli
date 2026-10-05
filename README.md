@@ -18,7 +18,7 @@ bash Packaging/build-and-package.sh --install
 
 The source lives in Dropbox. `.build` is a symlink to `~/Library/Caches/m4ix.cli/build`, so SwiftPM's cache of nearly a gigabyte never syncs. On a Mac where that link is missing, recreate it before building: `mkdir -p ~/Library/Caches/m4ix.cli/build && ln -s ~/Library/Caches/m4ix.cli/build .build`.
 
-The script builds `PrivateCLIHost` in release mode and creates versioned app and ZIP artifacts in `outputs/`. With `--install`, it installs the build as `/Applications/m4ix.CLI.app`. The app was called Private CLIs before 0.5.0; the bundle ID and private profiles are unchanged, so logins and history carry over. The bundle is signed locally with an ad hoc signature; it is not notarized for distribution. It includes SwiftTerm's MIT license in `Contents/Resources/Licenses`.
+The script builds `PrivateCLIHost` in release mode and creates versioned app and ZIP artifacts in `outputs/`. With `--install`, it installs the build as `~/Applications/m4ix.CLI.app` and retains the previous app under `~/Library/Caches/m4ix.cli/install-backups/`. Quit the running app and open that exact user Applications copy to load the update. Set `M4IX_INSTALL_DIR=/Applications` when building to choose the system Applications folder instead. The app was called Private CLIs before 0.5.0; the bundle ID and private profiles are unchanged, so logins and history carry over. The bundle is signed locally with an ad hoc signature; it is not notarized for distribution. It includes SwiftTerm's MIT license in `Contents/Resources/Licenses`.
 
 ## Use
 
@@ -83,6 +83,13 @@ take turns replying. **Let them discuss** defaults to six replies per exchange;
 choose a different limit or turn it off for one reply from each. **Stop** (⌘.)
 interrupts the current reply and stops the relay. An unfinished or failed reply
 is never passed to the other agent.
+
+Use **Send task to → Claude/Codex** when the discussion is ready for implementation.
+Write the task and review or edit the completed discussion messages before
+choosing **Start Claude/Codex**. The new conversation uses the discussion's
+project and account profile. The room and its unsent draft remain available;
+**Save for later** preserves the editable handoff in Recovery. Choosing a
+provider only opens the review form and sends nothing.
 
 Use **To → Claude/Codex**, or start a message with **@claude** or **@codex**, to
 request just one reply. Send with **⌘Return**. After an exchange, add your own

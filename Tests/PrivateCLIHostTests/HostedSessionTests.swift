@@ -118,7 +118,7 @@ final class HostedSessionTests: XCTestCase {
             let activityBeforeSend = session.conversationUpdatedAt
             XCTAssertTrue(session.sendPrompt("first café\nsecond line"))
             XCTAssertFalse(session.sendPrompt("must not overlap"))
-            try await waitUntil { FileManager.default.fileExists(atPath: capture.path) }
+            try await waitUntil { hasCompleteRecord(capture) }
             let data = try Data(contentsOf: capture)
             let records = String(decoding: data, as: UTF8.self).split(separator: "\n")
             XCTAssertEqual(records.count, 1)
@@ -168,13 +168,13 @@ final class HostedSessionTests: XCTestCase {
         XCTAssertEqual(model.selected, .claude)
         XCTAssertEqual(model.currentSession.id, first.id)
         XCTAssertTrue(model.submitPrompt("PROJECT_A", images: []))
-        try await waitUntil { FileManager.default.fileExists(atPath: firstCapture.path) }
+        try await waitUntil { hasCompleteRecord(firstCapture) }
         XCTAssertFalse(FileManager.default.fileExists(atPath: secondCapture.path))
         model.selectProject(ProjectRecord(path: secondProject.path))
         model.selectLiveSession(second)
         XCTAssertEqual(model.selected, .codex)
         XCTAssertTrue(model.submitPrompt("PROJECT_B", images: []))
-        try await waitUntil { FileManager.default.fileExists(atPath: secondCapture.path) }
+        try await waitUntil { hasCompleteRecord(secondCapture) }
         for (capture, project, prompt) in [(firstCapture, firstProject, "PROJECT_A"), (secondCapture, secondProject, "PROJECT_B")] {
             let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: capture)) as? [String: String])
             XCTAssertEqual(record["prompt"], prompt)
@@ -220,7 +220,7 @@ final class HostedSessionTests: XCTestCase {
         XCTAssertTrue(visible.allSatisfy { model.isSelected($0) && $0.hostsConversation })
         try await waitUntil {
             model.updateAttention()
-            return captures.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+            return captures.values.allSatisfy { hasCompleteRecord($0) }
         }
         for (agent, capture) in captures {
             let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: capture)) as? [String: String])
@@ -280,6 +280,54 @@ final class HostedSessionTests: XCTestCase {
         try await waitUntil { ((try? String(contentsOf: capture, encoding: .utf8)) ?? "").hasSuffix("\n") }
         let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: capture)) as? [String: String])
         XCTAssertEqual(record["prompt"], "still working")
+    }
+
+    func testReviewedSharedDiscussionStartsInItsProfileAndRecordsTheHandoff() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "m4ix.cli.shared-handoff." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(root.path, forKey: "PrivateCLIHostWorkingDirectory")
+        let model = HostModel(defaults: defaults, profileBase: root.appendingPathComponent("profiles"))
+        defer { model.stopAllSessions() }
+        let profile = try model.production.addProfile(name: "Fixture account")
+        model.selectProfile(profile.id)
+        let store = model.projectContextStore
+        let historyURL = root.appendingPathComponent("handoff.jsonl")
+        setenv("HOST_TEST_CAPTURE", historyURL.path, 1)
+        defer { unsetenv("HOST_TEST_CAPTURE") }
+        let draft = HandoffDraft(source: "Shared chat", target: "Codex", projectPath: root.path,
+                                 context: "Unreviewed proposal", profileID: profile.id, contextKind: .discussion)
+        let prompt = draft.prompt(task: "Implement the reviewed plan", context: "You: Keep the public API.\nClaude: Add regression coverage.")
+        let session = try await model.startHandoff(draft, prompt: prompt)
+        XCTAssertEqual(session.agent, .codex)
+        XCTAssertEqual(session.profileID, profile.id)
+        XCTAssertEqual(session.profileDirectory.path, model.profileBase.appendingPathComponent("codex").path)
+        try await waitUntil {
+            session.refreshPromptReadiness()
+            return !session.isSendingPrompt && ((try? String(contentsOf: historyURL, encoding: .utf8)) ?? "").hasSuffix("\n")
+        }
+        let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: historyURL)) as? [String: String])
+        XCTAssertEqual(record["prompt"], prompt)
+        XCTAssertFalse(record["prompt"]!.contains("Unreviewed proposal"))
+        let saved = try await store.load(path: root.path)
+        XCTAssertEqual(saved.handoffs.count, 1)
+        XCTAssertEqual(saved.handoffs[0].source, "Shared chat")
+        XCTAssertEqual(saved.handoffs[0].state, "Launch requested")
+        model.production.flush()
+        XCTAssertFalse(model.production.drafts.contains { $0.id == session.id }, "Confirmed delivery must clear the recovery draft")
+        model.selectProfile("default")
+        do {
+            _ = try await model.startHandoff(draft, prompt: prompt)
+            XCTFail("A reviewed task must not launch under a different account")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("selected project changed"))
+        }
+    }
+
+    private func hasCompleteRecord(_ url: URL) -> Bool {
+        (try? Data(contentsOf: url).last) == 0x0a
     }
 
     private func waitUntil(file: StaticString = #filePath, line: UInt = #line, _ condition: () -> Bool) async throws {

@@ -78,6 +78,7 @@ final class SharedChatTests: XCTestCase {
         chat.draft = "Compare two navigation approaches."
         XCTAssertTrue(chat.send())
         XCTAssertFalse(chat.send(), "Sending while a turn runs must not overlap deliveries")
+        XCTAssertNil(chat.handoff(to: .codex, profileID: "default"), "An implementation handoff must wait for completed replies")
         try await waitUntil { !chat.isRunning }
         XCTAssertNil(chat.failure)
         XCTAssertEqual(chat.thread.messages.map(\.speaker), ["you", "claude", "codex", "claude", "codex"])
@@ -93,6 +94,41 @@ final class SharedChatTests: XCTestCase {
         XCTAssertFalse(requests[2].prompt.contains("Compare two navigation approaches."), "Do not repeatedly resend prior human input")
         XCTAssertTrue(requests[3].prompt.contains("claude reply 3"))
         XCTAssertEqual(chat.repliesRemaining, 0)
+    }
+
+    func testHandoffPreparesBothProvidersWithoutStartingWorkOrChangingDiscussion() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let profileID = UUID().uuidString.lowercased()
+        let profile = root.appendingPathComponent("named-profiles/\(profileID)")
+        let store = SharedChatStore(profileBase: profile, project: root)
+        var history = SharedChatHistory()
+        history.threads[0].title = "Parser plan"
+        history.threads[0].draft = "Unsent follow-up"
+        history.threads[0].messages = [SharedChatMessage(speaker: "you", text: "Keep existing inputs working."),
+                                      SharedChatMessage(speaker: "claude", text: "Implement a small parser."),
+                                      SharedChatMessage(speaker: "codex", text: "Check malformed input too.")]
+        try await store.save(history, version: 1)
+        let fixture = DiscussionFixture()
+        let chat = SharedChat(project: root, profileBase: profile) { request, _, _ in try await fixture.reply(request) }
+        XCTAssertFalse(chat.canHandoff)
+        await chat.load()
+        for agent in Agent.allCases {
+            let draft = try XCTUnwrap(chat.handoff(to: agent, profileID: profileID))
+            XCTAssertEqual(draft.projectPath, root.path)
+            XCTAssertEqual(draft.profileID, profileID)
+            XCTAssertEqual(draft.target, agent.title)
+            XCTAssertEqual(draft.contextKind, .discussion)
+            XCTAssertTrue(draft.initialTask.isEmpty, "The user supplies the implementation task after review")
+            XCTAssertTrue(draft.context.contains("Claude:\nImplement a small parser."))
+            XCTAssertTrue(draft.context.contains("Codex:\nCheck malformed input too."))
+            XCTAssertFalse(draft.context.contains("Unsent follow-up"))
+        }
+        let requests = await fixture.recorded()
+        XCTAssertTrue(requests.isEmpty, "Choosing a provider only prepares an editable handoff")
+        XCTAssertEqual(chat.thread.messages, history.threads[0].messages)
+        XCTAssertEqual(chat.draft, "Unsent follow-up")
+        await chat.flush()
     }
 
     func testMentionTargetsOneAgentAndPersistenceDoesNotRestartTheExchange() async throws {

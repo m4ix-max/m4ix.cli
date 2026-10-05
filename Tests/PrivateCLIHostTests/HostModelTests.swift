@@ -4,6 +4,25 @@ import XCTest
 
 @MainActor
 final class HostModelTests: XCTestCase {
+    func testUpdateBackupIncludesTheLatestUnsentDiscussionDraft() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("discussion-backup-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "m4ix.cli.discussion-backup." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(root.path, forKey: "PrivateCLIHostWorkingDirectory")
+        let model = HostModel(defaults: defaults, profileBase: root.appendingPathComponent("data"))
+        let chat = model.sharedChat
+        await chat.load()
+        chat.draft = "Latest unsent plan"
+        await model.flushSharedChats()
+        let backup = try AppUpdates.backup(root: model.dataRoot, preferences: model.savedPreferences, version: "0.17.0")
+        let stored = SharedChatStore(profileBase: backup, project: root)
+        let history = try await stored.load()
+        XCTAssertEqual(history.threads[0].draft, "Latest unsent plan")
+    }
+
     func testConversationOrderSurvivesRestorationAndUsesLatestActivity() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let profile = root.appendingPathComponent("profiles")

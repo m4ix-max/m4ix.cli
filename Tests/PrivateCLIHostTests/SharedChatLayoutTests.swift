@@ -20,7 +20,7 @@ final class SharedChatLayoutTests: XCTestCase {
         let chat = SharedChat(project: root, profileBase: root)
         await chat.load()
         for size in [NSSize(width: 840, height: 760), NSSize(width: 720, height: 620)] {
-            let view = NSHostingView(rootView: SharedChatView(chat: chat))
+            let view = NSHostingView(rootView: SharedChatView(chat: chat, onStart: { _, _ in }))
             view.frame = NSRect(origin: .zero, size: size)
             let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
             window.contentView = view

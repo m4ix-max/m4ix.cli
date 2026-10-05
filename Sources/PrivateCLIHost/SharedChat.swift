@@ -96,6 +96,17 @@ final class SharedChat: ObservableObject {
     var isRunning: Bool { activeSpeaker != nil }
     var canSend: Bool { loaded && writable && !isRunning && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var canContinue: Bool { loaded && writable && !isRunning && !thread.messages.isEmpty }
+    var canHandoff: Bool { loaded && !isRunning && !thread.messages.isEmpty }
+
+    func handoff(to agent: Agent, profileID: String) -> HandoffDraft? {
+        guard canHandoff else { return nil }
+        let context = "Discussion: \(thread.title)\n\n" + thread.messages.map { message in
+            let speaker = message.speaker == "you" ? "You" : message.speaker.capitalized
+            return "\(speaker):\n\(message.text)"
+        }.joined(separator: "\n\n")
+        return HandoffDraft(source: "Shared chat", target: agent.title, projectPath: project.path,
+                            context: context, profileID: profileID, contextKind: .discussion)
+    }
 
     init(project: URL, profileBase: URL, choices: [String: ModelChoice] = [:], runner: Runner? = nil) {
         self.project = project

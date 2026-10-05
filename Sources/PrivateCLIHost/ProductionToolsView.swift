@@ -579,6 +579,7 @@ struct UpdateToolsView: View {
                     let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development"
                     model.production.flush(); model.verification.flush()
                     Task {
+                        await model.flushSharedChats()
                         do {
                             let staged = try await Task.detached(priority: .utility) {
                                 _ = try AppUpdates.backup(root: root, preferences: preferences, version: currentVersion)

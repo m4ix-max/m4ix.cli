@@ -7,6 +7,11 @@ target_app=$2
 data_root=$3
 wait_pid=${4:-}
 [[ "$source_app" == /* && "$target_app" == /* && "$data_root" == /* ]] || exit 1
+source_parent=$(dirname -- "$source_app")
+[[ $(basename -- "$source_app") == m4ix.CLI.app &&
+   $(dirname -- "$source_parent") == "$data_root/updates/staged" &&
+   $(basename -- "$source_parent") =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ &&
+   ! -L "$source_parent" && ! -L "$source_app" && "$source_app" != "$target_app" ]] || exit 1
 if [[ -n "$wait_pid" ]]; then
     [[ "$wait_pid" =~ ^[0-9]+$ && "$wait_pid" -gt 1 ]] || exit 1
     while kill -0 "$wait_pid" 2>/dev/null; do sleep 1; done
@@ -37,4 +42,6 @@ if ! mv "$stage_dir/new.app" "$target_app"; then
     if [[ -d "$stage_dir/previous.app" ]]; then mv "$stage_dir/previous.app" "$target_app"; fi
     exit 1
 fi
+rm -rf -- "$source_app"
+rmdir -- "$source_parent" 2>/dev/null || true
 printf 'Installed: %s\n' "$target_app"

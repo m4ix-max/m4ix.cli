@@ -804,6 +804,10 @@ final class HostModel: ObservableObject {
         sharedChats[key] = chat
         return chat
     }
+
+    func flushSharedChats() async {
+        for chat in Array(sharedChats.values) { await chat.flush() }
+    }
     private struct LaunchRequest {
         let session: TerminalSession
         let action: TerminalAction
@@ -859,11 +863,7 @@ final class HostModel: ObservableObject {
         self.projects = self.savedProjectPaths.map(ProjectRecord.init(path:))
         self.workspaces[workspaceKey(initialPath)] = ProjectWorkspace(projectPath: initialPath,
             profileBase: production.base(for: selectedProfileID), profileID: selectedProfileID)
-        if let path = defaults.string(forKey: "PrivateCLIHostPendingUpdate"),
-           path.hasPrefix(profileBase.appendingPathComponent("updates/staged/").path + "/") {
-            let staged = URL(fileURLWithPath: path)
-            if (try? AppUpdates.inspectApplication(staged)) != nil { self.pendingUpdate = staged }
-        }
+        self.pendingUpdate = AppUpdates.restorePending(root: profileBase, preferences: defaults)
     }
 
     deinit { periodicTimers.forEach { $0.invalidate() } }
@@ -2623,7 +2623,9 @@ struct HostView: View {
             ProductionToolsView(model: model, center: production, onRecover: recoverDraft)
         }
         .sheet(isPresented: $showingSharedChat) {
-            SharedChatView(chat: model.sharedChat)
+            SharedChatView(chat: model.sharedChat, profileID: model.selectedProfileID, recovery: production) { draft, prompt in
+                _ = try await model.startHandoff(draft, prompt: prompt)
+            }
         }
         .alert("Workspace tools", isPresented: Binding(get: { model.operationError != nil }, set: { if !$0 { model.operationError = nil } })) {
             Button("OK") { model.operationError = nil }
@@ -2705,7 +2707,7 @@ struct HostView: View {
             }
             DispatchQueue.main.async {
                 handoffDraft = HandoffDraft(id: draft.id, source: payload.source, target: payload.target, projectPath: draft.project,
-                    context: payload.context, profileID: draft.profileID, initialTask: payload.task)
+                    context: payload.context, profileID: draft.profileID, initialTask: payload.task, contextKind: payload.contextKind ?? .terminal)
             }
             return
         }

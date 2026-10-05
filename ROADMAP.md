@@ -2,6 +2,29 @@
 
 m4ix.CLI should be a reliable macOS workspace for using Claude and Codex together on real software projects. Success requires runtime evidence as well as passing unit tests.
 
+## Reviewed implementation tasks and update repair for 0.17.0
+
+Shared chat now prepares a task for either provider through the existing
+editable handoff form. The user writes the implementation task and reviews
+the completed discussion before launching a separate conversation in its
+project and account profile. Unsent room text and unfinished replies are not
+included. Handoff recovery preserves whether the reference is a discussion
+or a terminal excerpt, including older saved drafts.
+
+Updates replace the running installation and remove successfully installed
+staged copies. Restart disarms completed or outdated pending updates; an
+explicit rollback still applies when quitting the session that staged it.
+Backups flush cached discussions and include default and named-profile
+project/discussion records without copying provider credentials. Local
+installation defaults to ~/Applications and retains the previous app.
+Packaged apps record the source revision and whether the checkout was dirty.
+
+Regression checks cover signed app swaps, failed installation, rollback
+copies, stale update markers, backup coverage, reviewed handoff delivery,
+profile changes, and draft preservation. Verification logs and previews are
+in `outputs/stabilization-2026-10-05/`. Native authenticated packaged-app
+interaction remains a separate runtime check.
+
 ## Shared chat for 0.15.0
 
 Claude, Codex, and the user can hold one shared discussion. The host runs

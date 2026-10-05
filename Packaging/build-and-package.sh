@@ -117,6 +117,13 @@ PLIST
 
 plutil -replace CFBundleShortVersionString -string "$APP_VERSION" "$STAGED_APP/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$APP_BUILD" "$STAGED_APP/Contents/Info.plist"
+SOURCE_REVISION=$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true)
+if [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+    plutil -insert M4IXSourceRevision -string "$SOURCE_REVISION" "$STAGED_APP/Contents/Info.plist"
+    SOURCE_DIRTY=false
+    if [[ -n $(git -C "$PROJECT_DIR" status --porcelain) ]]; then SOURCE_DIRTY=true; fi
+    plutil -insert M4IXSourceDirty -bool "$SOURCE_DIRTY" "$STAGED_APP/Contents/Info.plist"
+fi
 
 ICONSET="$STAGING_DIR/AppIcon.iconset"
 mkdir -p "$ICONSET"

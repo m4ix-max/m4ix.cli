@@ -137,9 +137,16 @@ final class TerminalScrollbackTests: XCTestCase {
             let knob = indicator.knobRect
             let scaleX = CGFloat(bitmap.pixelsWide) / indicator.bounds.width
             let scaleY = CGFloat(bitmap.pixelsHigh) / indicator.bounds.height
+            // At the middle position the deliberate dark crossbar crosses
+            // the thumb's centre. Sample the lime fill away from that marker.
             let colour = try XCTUnwrap(bitmap.colorAt(x: Int(knob.midX * scaleX),
-                y: Int(knob.midY * scaleY))?.usingColorSpace(.deviceRGB))
+                y: Int((knob.minY + knob.height * 0.25) * scaleY))?.usingColorSpace(.deviceRGB))
             XCTAssertGreaterThan(colour.redComponent, 0.4, "The thumb must actually render, not just update its value")
+            if position == 0.5 {
+                let marker = try XCTUnwrap(bitmap.colorAt(x: Int(knob.midX * scaleX),
+                    y: Int(knob.midY * scaleY))?.usingColorSpace(.deviceRGB))
+                XCTAssertLessThan(marker.redComponent, 0.2, "The contrasting reading-position marker must remain visible")
+            }
             let hasSignalPixels = (0..<bitmap.pixelsHigh).contains { y in
                 let pointY = CGFloat(y) / scaleY
                 guard knob.minY <= pointY, pointY <= knob.maxY,

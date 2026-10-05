@@ -1,3 +1,18 @@
+# m4ix.CLI 0.17.0
+
+Shared chat can send an agreed task to Claude or Codex. Choose Send task to,
+write the task, and review or edit the discussion context before starting a
+new implementation conversation. The saved discussion and its unsent draft
+stay available. Saved handoff drafts retain their discussion context.
+
+Updates replace the app installation you are running. Successfully installed
+packages are removed from staging, and restart clears completed or outdated
+pending updates. Backups now include Shared chat and named profiles' project
+records while keeping provider credentials separate.
+
+Local installation defaults to ~/Applications/m4ix.CLI.app and retains the
+previous app. M4IX_INSTALL_DIR selects another installation folder.
+
 # m4ix.CLI 0.16.2
 
 Orders sidebar conversations by their latest activity and preserves that order
