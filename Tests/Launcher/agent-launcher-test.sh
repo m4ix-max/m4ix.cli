@@ -33,6 +33,7 @@ record = {
     "argv": sys.argv[1:],
     "claude_profile": os.environ.get("CLAUDE_CONFIG_DIR"),
     "codex_profile": os.environ.get("CODEX_HOME"),
+    "hermes_home": os.environ.get("HERMES_HOME"),
     "anthropic_key": os.environ.get("ANTHROPIC_API_KEY"),
     "openai_key": os.environ.get("OPENAI_API_KEY"),
     "host_choice": [os.environ.get(name) for name in ("PRIVATE_CLI_HOST_MODEL", "PRIVATE_CLI_HOST_EFFORT")],
@@ -51,6 +52,8 @@ launch_fake() {
         PRIVATE_CLI_HOST_DATA_DIR="$profile_root" \
         PRIVATE_CLI_HOST_CLAUDE_BIN="$fake_cli" \
         PRIVATE_CLI_HOST_CODEX_BIN="$fake_cli" \
+        PRIVATE_CLI_HOST_HERMES_BIN="${hermes_bin:-$fake_cli}" \
+        HERMES_HOME="$test_home/.hermes" \
         FAKE_CLI_CAPTURE="$capture" \
         FAKE_CLI_CALLS="$calls" \
         ANTHROPIC_API_KEY=should-be-cleared \
@@ -215,6 +218,70 @@ PY
         exit 1
     fi
 done
+
+# Hermes runs from its own home: no private profile, no identity link, its
+# classic interface for the composer, and session IDs in its own format.
+hermes_id=20261011_235540_a37dd0
+assert_hermes() {
+    python3 - "$capture" "$test_home/.hermes" "$@" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    record = json.load(source)
+assert record["argv"] == sys.argv[3:], (record["argv"], sys.argv[3:])
+assert record["hermes_home"] == sys.argv[2], record["hermes_home"]
+assert record["claude_profile"] is None and record["codex_profile"] is None
+assert record["anthropic_key"] is None and record["openai_key"] is None
+assert record["host_choice"] == [None, None], record["host_choice"]
+PY
+}
+launch_fake hermes run
+assert_hermes chat --cli
+launch_fake hermes resume "$hermes_id"
+assert_hermes chat --cli --resume "$hermes_id"
+PRIVATE_CLI_HOST_MODEL=probe-model PRIVATE_CLI_HOST_EFFORT=high launch_fake hermes resume "$hermes_id"
+assert_hermes chat --cli --model probe-model --reasoning high --resume "$hermes_id"
+launch_fake hermes version
+assert_hermes --version
+launch_fake hermes login
+assert_hermes model
+[[ ! -e "$profile_root/hermes" ]]
+for invalid in "resume $session_id" "resume 20261011_235540_a37dd0;x" "run $hermes_id" "discuss" "discuss $hermes_id"; do
+    rm -f "$capture"
+    # shellcheck disable=SC2086
+    if launch_fake hermes $invalid >/dev/null 2>&1; then
+        printf 'Invalid Hermes launch was accepted: %s\n' "$invalid" >&2
+        exit 1
+    fi
+    [[ ! -e "$capture" ]]
+done
+
+# The account check names the configured provider's login state and fails
+# when Hermes reports it logged out or has no provider at all.
+fake_hermes="$test_root/fake-hermes"
+cat > "$fake_hermes" <<'FAKE'
+#!/bin/bash
+case "$*" in
+    'config get model.provider') [[ -n ${FAKE_HERMES_PROVIDER:-} ]] && printf '%s\n' "$FAKE_HERMES_PROVIDER" ;;
+    "auth status $FAKE_HERMES_PROVIDER") printf '%s: %s\n' "$FAKE_HERMES_PROVIDER" "$FAKE_HERMES_AUTH" ;;
+    *) printf 'unexpected arguments: %s\n' "$*"; exit 2 ;;
+esac
+FAKE
+chmod 700 "$fake_hermes"
+hermes_status() { hermes_bin="$fake_hermes" launch_fake hermes status; }
+output=$(FAKE_HERMES_PROVIDER=nous FAKE_HERMES_AUTH='logged in' hermes_status)
+[[ "$output" == 'nous: logged in' ]]
+if output=$(FAKE_HERMES_PROVIDER=nous FAKE_HERMES_AUTH='logged out (No access token found for Nous Portal login.)' hermes_status); then
+    printf 'A logged-out Hermes passed the account check\n' >&2
+    exit 1
+fi
+[[ "$output" == 'nous: logged out (No access token found for Nous Portal login.)' ]]
+if output=$(FAKE_HERMES_PROVIDER='' hermes_status); then
+    printf 'Hermes without a provider passed the account check\n' >&2
+    exit 1
+fi
+[[ "$output" == *'No inference provider is set'* ]]
+[[ ! -e "$profile_root/hermes" ]]
 
 # Simulate simultaneous account checks and terminal launches on fresh profiles.
 for round in 1 2 3; do

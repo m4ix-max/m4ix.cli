@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 struct ConversationMessage: Identifiable, Equatable, Sendable {
     let id: String
@@ -27,6 +28,8 @@ actor ConversationTranscriptReader {
     private var seen = Set<String>()
     private var snapshot = ConversationTranscriptSnapshot()
     private var nextSearch = Date.distantPast
+    private var database: OpaquePointer?
+    private var lastMessageRow: Int64 = 0
 
     init(agent: Agent, profile: URL, conversationID: String) {
         self.agent = agent
@@ -34,8 +37,13 @@ actor ConversationTranscriptReader {
         self.conversationID = conversationID.lowercased()
     }
 
+    deinit {
+        if let database { sqlite3_close(database) }
+    }
+
     func read() -> ConversationTranscriptSnapshot {
-        guard UUID(uuidString: conversationID) != nil else { return snapshot }
+        guard agent.isConversationID(conversationID) else { return snapshot }
+        if agent == .hermes { return readHermes() }
         if file == nil, Date() >= nextSearch {
             file = findFile()
             nextSearch = Date().addingTimeInterval(2)
@@ -69,6 +77,71 @@ actor ConversationTranscriptReader {
             snapshot.error = "Conversation messages could not be read. Open Terminal to continue."
             self.file = nil
         }
+        return snapshot
+    }
+
+    /// Hermes keeps messages in its session database, read here without
+    /// writing. A compressed conversation continues in a child session, and
+    /// the summary that seeds it is context rather than a chat turn.
+    private func readHermes() -> ConversationTranscriptSnapshot {
+        if database == nil {
+            guard Date() >= nextSearch else { return snapshot }
+            nextSearch = Date().addingTimeInterval(2)
+            let url = profile.appendingPathComponent("state.db")
+            var handle: OpaquePointer?
+            guard FileManager.default.fileExists(atPath: url.path),
+                  sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+                  let handle else {
+                if let handle { sqlite3_close(handle) }
+                return snapshot
+            }
+            sqlite3_busy_timeout(handle, 200)
+            database = handle
+        }
+        let query = """
+            WITH RECURSIVE chain(id) AS (
+                SELECT ?1
+                UNION
+                SELECT child.id FROM sessions child
+                JOIN sessions parent ON child.parent_session_id = parent.id
+                JOIN chain ON parent.id = chain.id
+                WHERE parent.end_reason = 'compression'
+            )
+            SELECT id, role, content FROM messages
+            WHERE session_id IN chain AND id > ?2 AND role IN ('user', 'assistant')
+              AND IFNULL(active, 1) != 0 AND IFNULL(display_kind, '') != 'hidden'
+            ORDER BY id
+            """
+        var statement: OpaquePointer?
+        guard let database, sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK, let statement else {
+            return closeHermes()
+        }
+        defer { sqlite3_finalize(statement) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(statement, 1, conversationID, -1, transient)
+        sqlite3_bind_int64(statement, 2, lastMessageRow)
+        var step = sqlite3_step(statement)
+        while step == SQLITE_ROW {
+            let row = sqlite3_column_int64(statement, 0)
+            lastMessageRow = max(lastMessageRow, row)
+            let role = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
+            let text = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
+            let isSummary = role == "user" && (text.hasPrefix("[CONTEXT COMPACTION") || text.hasPrefix("[CONTEXT SUMMARY]"))
+            if !isSummary, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                snapshot.messages.append(ConversationMessage(id: "hermes:\(row)", speaker: role == "user" ? "you" : "hermes", text: text))
+            }
+            step = sqlite3_step(statement)
+        }
+        guard step == SQLITE_DONE || step == SQLITE_BUSY else { return closeHermes() }
+        snapshot.foundFile = true
+        snapshot.error = nil
+        return snapshot
+    }
+
+    private func closeHermes() -> ConversationTranscriptSnapshot {
+        if let database { sqlite3_close(database) }
+        database = nil
+        snapshot.error = "Conversation messages could not be read. Open Terminal to continue."
         return snapshot
     }
 

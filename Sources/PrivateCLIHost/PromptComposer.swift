@@ -14,6 +14,9 @@ struct PromptComposer: View {
         /// A menu or dialog holds the CLI's screen, where Return would
         /// choose an option. Text can be drafted but not sent.
         case blocked
+        /// The CLI is working and takes no message until its turn ends.
+        /// Text can be drafted but not sent.
+        case waiting
         /// No CLI is running here, so the text starts a new conversation.
         case start
     }
@@ -88,7 +91,7 @@ struct PromptComposer: View {
     }
 
     private var canSubmit: Bool {
-        isEnabled && !isBusy && !isDictating && mode != .blocked && !(trimmedTask.isEmpty && images.isEmpty)
+        isEnabled && !isBusy && !isDictating && mode != .blocked && mode != .waiting && !(trimmedTask.isEmpty && images.isEmpty)
     }
 
     private var placeholder: String {
@@ -112,6 +115,14 @@ struct PromptComposer: View {
                         .buttonStyle(ElevateHoverButtonStyle())
                         .foregroundStyle(ElevateTheme.ink)
                         .accessibilityIdentifier("promptAnswerTerminal")
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(ElevateTheme.graphite)
+            } else if mode == .waiting {
+                HStack(spacing: 8) {
+                    Image(systemName: "hourglass")
+                    Text("\(agentName) is working. Send when its turn ends; your draft stays here.")
+                    Spacer(minLength: 8)
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(ElevateTheme.graphite)
@@ -228,6 +239,7 @@ struct PromptComposer: View {
         switch mode {
         case .send: return "Sends to the conversation on screen. Press Return to submit, Shift Return for a new line"
         case .blocked: return "The terminal is showing a menu. Answer it in the terminal before sending"
+        case .waiting: return "\(agentName) is working. Send when its turn ends"
         case .start: return "Starts a new conversation. Press Return to submit, Shift Return for a new line"
         }
     }

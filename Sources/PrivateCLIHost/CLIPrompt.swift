@@ -71,20 +71,66 @@ enum CLIPrompt {
             .components(separatedBy: "\n")
     }
 
+    /// Whether Return would submit text typed into the CLI's own input.
+    static func acceptsText(screen: [String], agent: Agent) -> Bool {
+        switch agent {
+        case .claude, .hermes:
+            return rawRuledInputAcceptsText(screen: screen, agent: agent)
+                && terminalResponseRequest(screen: screen, agent: agent) == nil
+        case .codex:
+            return codexAcceptsText(screen: screen)
+        }
+    }
+
     /// Claude draws its input as a `❯` line between two horizontal rules.
     /// Its dialogs replace that box, and their options start with `❯` too,
     /// so only the ruled box counts.
     static func claudeAcceptsText(screen: [String]) -> Bool {
-        rawClaudeAcceptsText(screen: screen) && terminalResponseRequest(screen: screen, agent: .claude) == nil
+        acceptsText(screen: screen, agent: .claude)
     }
 
-    private static func rawClaudeAcceptsText(screen: [String]) -> Bool {
-        guard !screen.contains(where: isNumberedOption) else { return false }
-        for index in screen.indices where index > 0 && trimmed(screen[index]).hasPrefix("❯") {
+    /// Hermes draws the same ruled input, bare only while it waits for a
+    /// message. Every other state marks it: `⚕ ❯` while it works, `⚠ ❯`
+    /// for an approval, `? ❯` for a question, 🔐 or 🔑 for a password.
+    /// Approval choices are numbered inside a panel, `│ ❯ 1. Allow once │`,
+    /// where Return would choose for you.
+    private static func rawRuledInputAcceptsText(screen: [String], agent: Agent) -> Bool {
+        let options = agent == .hermes ? screen.map(unboxed) : screen
+        guard !options.contains(where: isNumberedOption) else { return false }
+        if agent == .hermes, hermesPanelChoice(in: screen) != nil { return false }
+        for index in screen.indices where index > 0 && isInputLine(screen[index], agent: agent) {
             guard isRule(screen[index - 1]) else { continue }
             if screen[(index + 1)...].contains(where: isRule) { return true }
         }
         return false
+    }
+
+    /// The chosen row of a Hermes panel, however its choices are numbered:
+    /// `│ ❯ 1. Allow once │`, `│ ❯ [1] Yes — do it │`.
+    private static func hermesPanelChoice(in screen: [String]) -> Int? {
+        screen.indices.last { trimmed(screen[$0]).hasPrefix("│") && unboxed(screen[$0]).hasPrefix("❯") }
+    }
+
+    /// A non-default Hermes profile names itself before the prompt, `work ❯`.
+    private static func isInputLine(_ line: String, agent: Agent) -> Bool {
+        let text = trimmed(line)
+        if text.hasPrefix("❯") { return true }
+        return agent == .hermes && text.range(of: #"^[a-z0-9][a-z0-9_-]{0,63} ❯"#, options: .regularExpression) != nil
+    }
+
+    /// Hermes takes no message while it works. Its input reads `⚕ ❯` until
+    /// the turn ends.
+    static func hermesIsWorking(screen: [String]) -> Bool {
+        screen.indices.contains { index in
+            index > 0 && isRule(screen[index - 1]) && trimmed(screen[index]).hasPrefix("⚕")
+        }
+    }
+
+    /// The session ID in the banner Hermes opens with, `Session: 20261011_235540_a37dd0`.
+    static func hermesSessionID(in text: String) -> String? {
+        guard let match = text.range(of: #"Session:\s+[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}\b"#,
+                                     options: .regularExpression) else { return nil }
+        return text[match].split(whereSeparator: \.isWhitespace).last.map(String.init)
     }
 
     /// Codex's composer is the last `›` line on screen. Its menus number
@@ -108,9 +154,9 @@ enum CLIPrompt {
 
     private static func rawInputStartRow(screen: [String], agent: Agent) -> Int? {
         switch agent {
-        case .claude:
-            guard rawClaudeAcceptsText(screen: screen),
-                  let row = screen.indices.last(where: { trimmed(screen[$0]).hasPrefix("❯") }), row > 0,
+        case .claude, .hermes:
+            guard rawRuledInputAcceptsText(screen: screen, agent: agent),
+                  let row = screen.indices.last(where: { isInputLine(screen[$0], agent: agent) }), row > 0,
                   isRule(screen[row - 1]) else { return nil }
             return row - 1
         case .codex:
@@ -130,7 +176,7 @@ enum CLIPrompt {
         if agent == .codex, let footer = codexQuestionFooter(in: screen) {
             return footer.signature
         }
-        let rows = screen.map { $0.trimmingCharacters(in: .whitespaces) }
+        let rows = screen.map { agent == .hermes ? unboxed($0) : $0.trimmingCharacters(in: .whitespaces) }
         let nonempty = rows.indices.filter { !rows[$0].isEmpty }
         guard let last = nonempty.last else { return nil }
         let inputRow = rawInputStartRow(screen: screen, agent: agent)
@@ -159,6 +205,14 @@ enum CLIPrompt {
            rows[next].range(of: #"^(?:yes|no|allow|deny|cancel|exit|trust|continue)\b"#,
                             options: [.regularExpression, .caseInsensitive]) != nil {
             requestRow = selected
+        }
+        // Hermes marks the chosen row of each of its menus with `❯`, inside a
+        // panel or, once its input is marked, on a line of its own. Only the
+        // input line sits directly under a rule.
+        if agent == .hermes {
+            let loose = inputRow == nil
+                ? nonempty.last(where: { rows[$0].hasPrefix("❯") && !($0 > 0 && isRule(screen[$0 - 1])) }) : nil
+            if let selected = hermesPanelChoice(in: screen) ?? loose { requestRow = requestRow ?? selected }
         }
         for index in nonempty.suffix(4) where index > afterInput {
             let line = rows[index]
@@ -216,6 +270,14 @@ enum CLIPrompt {
 
     private static func trimmed(_ line: String) -> Substring {
         line.drop(while: { $0 == " " })
+    }
+
+    /// A row with a panel's side borders removed.
+    private static func unboxed(_ line: String) -> String {
+        var text = line.trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("│") { text.removeFirst() }
+        if text.hasSuffix("│") { text.removeLast() }
+        return text.trimmingCharacters(in: .whitespaces)
     }
 
     private static func isRule(_ line: String) -> Bool {

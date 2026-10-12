@@ -39,6 +39,21 @@ struct PixelSprite {
         "##.....######",
         ".......######"
     ])
+
+    /// The caduceus Hermes Agent draws in braille in its welcome banner:
+    /// spread wings over a staff with two snakes crossing down it.
+    static let hermes = PixelSprite(rows: [
+        "##....###....##",
+        ".###...#...###.",
+        "..####.#.####..",
+        "....##.#.##....",
+        "......###......",
+        "....##.#.##....",
+        "......###......",
+        "....##.#.##....",
+        "......###......",
+        ".......#......."
+    ])
 }
 
 /// One lime pixel marking work that is waiting for you. The solid ink edge

@@ -136,7 +136,9 @@ final class HostModelTests: XCTestCase {
         defaults.set(project.path, forKey: "PrivateCLIHostWorkingDirectory")
         defaults.set([
             ["project": project.path, "agent": "claude", "conversation": claudeID, "title": "Implementation", "selected": true],
-            ["project": project.path, "agent": "codex", "conversation": codexID, "title": "Review", "selected": true]
+            ["project": project.path, "agent": "codex", "conversation": codexID, "title": "Review", "selected": true],
+            ["project": project.path, "agent": "hermes", "conversation": "20261011_235540_a37dd0", "title": "Research", "selected": true],
+            ["project": project.path, "agent": "hermes", "conversation": UUID().uuidString, "title": "Not a Hermes ID", "selected": false]
         ], forKey: "PrivateCLIHostRestorableSessions")
         let row: [String: Any] = ["sessionId": claudeID, "timestamp": 1000, "project": project.path, "display": "Implementation"]
         try (JSONSerialization.data(withJSONObject: row) + Data([10])).write(to: profile.appendingPathComponent("claude/history.jsonl"))
@@ -151,7 +153,7 @@ final class HostModelTests: XCTestCase {
         XCTAssertEqual(model.selected, .codex)
         XCTAssertEqual(model.currentSession.id, codex.id)
         model.restoreSessions()
-        XCTAssertEqual(model.liveSessionsForCurrentProject().count, 2, "Repeated restoration must not duplicate sessions")
+        XCTAssertEqual(model.liveSessionsForCurrentProject().count, 3, "Repeated restoration must not duplicate sessions")
         model.refreshHistory()
         let deadline = Date().addingTimeInterval(3)
         while model.conversations.isEmpty && Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }

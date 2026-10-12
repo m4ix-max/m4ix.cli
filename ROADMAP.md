@@ -2,6 +2,41 @@
 
 m4ix.CLI should be a reliable macOS workspace for using Claude and Codex together on real software projects. Success requires runtime evidence as well as passing unit tests.
 
+## Hermes as a third provider for 0.18.0
+
+Hermes Agent joins Claude and Codex as a hosted provider. It runs from its
+own home and active profile instead of a private profile, and the app only
+reads that home: its session database supplies titles, ordering,
+restoration, and the chat view, following a compressed conversation into
+its continuation. The launcher starts `hermes chat --cli`, passes the
+toolbar's reasoning level, resumes with `--resume`, opens `hermes model` to
+log in, and reports `hermes auth status` for the configured provider. A new
+conversation takes its ID from the banner Hermes opens with.
+
+The composer sends only at Hermes's bare `❯`. Hermes marks its input in
+every other state and numbers approval and confirmation choices inside
+panels; either signal blocks sending on its own. While Hermes works, the
+message waits in the field. Hermes sends no terminal notifications, so its
+questions are read from the screen to mark the session. Side by side stays
+Claude and Codex, Shared chat can send a reviewed task to Hermes, and the
+narrow toolbar shows provider marks without names.
+
+On 2026-10-12, 133 Swift tests ran with four opt-in tests skipped and one
+failure, `TerminalScrollbackTests.testScrollbarDrawsVisibleThumbAtEachReadingPosition`,
+a pixel check of the scrollbar marker that fails identically on the
+unchanged 0.17.0 source on this Mac and passed in CI. Launcher checks
+passed, including Hermes arguments, home, session ID validation, and
+account states. The opt-in live test ran the installed Hermes 0.20.0
+through the launcher and a hosted terminal, against a local test model in a
+throwaway Hermes home, four times: the banner ID was bound, the message was
+delivered, the approval was raised and refused by the composer, attention
+was marked, the denial was answered, and the conversation reached History
+and the chat view. The idle and approval screens in the unit tests were
+captured from Hermes 0.20.0. Release packaging and signature checks passed
+for 0.18.0 (build 47), installed in ~/Applications. The packaged app has
+not been exercised with the user's own Hermes, whose Nous Portal login had
+no access token, and the native checks listed for 0.17.0 remain open.
+
 ## Reviewed implementation tasks and update repair for 0.17.0
 
 Shared chat now prepares a task for either provider through the existing

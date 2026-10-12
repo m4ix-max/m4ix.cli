@@ -7,15 +7,21 @@ struct ProviderCompatibility: Sendable {
     static let checking = ProviderCompatibility(version: "Checking", usesComposer: true, message: "Checking CLI compatibility…")
 
     /// The oldest version whose screens the composer was checked against.
-    /// Both CLIs update themselves every few days, so newer versions keep
+    /// The CLIs update themselves every few days, so newer versions keep
     /// the composer: each send still reads the live screen first, and any
     /// screen it does not recognise blocks sending.
     static func minimumVersion(for agent: Agent) -> String {
-        agent == .claude ? "2.1.287" : "0.159.3"
+        switch agent {
+        case .claude: return "2.1.287"
+        case .codex: return "0.159.3"
+        case .hermes: return "0.20.0"
+        }
     }
 
     static func evaluate(_ output: String, agent: Agent) -> ProviderCompatibility {
-        let pattern = #"\b[0-9]+\.[0-9]+\.[0-9]+\b"#
+        // Hermes prints `v0.20.0 (2026.8.3)`: the version follows a letter, and
+        // its release date looks like a version too.
+        let pattern = #"(?<![0-9.])[0-9]+\.[0-9]+\.[0-9]+\b"#
         let version = output.range(of: pattern, options: .regularExpression).map { String(output[$0]) } ?? "Unknown"
         let supported = version != "Unknown"
             && version.compare(minimumVersion(for: agent), options: .numeric) != .orderedAscending
@@ -28,11 +34,10 @@ struct ProviderCompatibility: Sendable {
         guard let launcher = HostPaths.launcher else {
             return ProviderCompatibility(version: "Missing", usesComposer: false, message: "The bundled CLI launcher is missing. Reinstall the app.")
         }
-        var environment = ProcessInfo.processInfo.environment
-        environment["PRIVATE_CLI_HOST_DATA_DIR"] = profileBase.path
         do {
             let result = try CommandRunner.run(executable: "/bin/bash", arguments: [launcher.path, agent.rawValue, "version"],
-                directory: directory, environment: environment, timeout: 3, outputLimit: 2048)
+                directory: directory, environment: agent.launcherEnvironment(profileBase: profileBase),
+                timeout: 3, outputLimit: 2048)
             guard result.status == 0 else {
                 return ProviderCompatibility(version: "Unavailable", usesComposer: false,
                     message: "The CLI could not be found or did not start. Open Setup to check its installation.")
@@ -64,16 +69,14 @@ enum SetupInspector {
             summary: "\(agent.title) \(compatibility.version)", action: "Install this provider's CLI, confirm its command works in Terminal, then check again."))
         results.append(SetupCheck(id: "Message composer", passed: compatibility.usesComposer,
             summary: compatibility.message, action: "Native terminal input remains available for unrecognized versions."))
-        let profile = profileBase.appendingPathComponent(agent.rawValue)
+        let profile = agent.profileDirectory(in: profileBase)
         let writable = FileManager.default.isWritableFile(atPath: profile.path)
         results.append(SetupCheck(id: "Profile access", passed: writable,
             summary: writable ? "Profile is writable" : "Profile is missing or read-only", action: "Open the profile in Finder and check its permissions. Log in to initialize a new profile."))
         if let launcher = HostPaths.launcher {
-            var environment = ProcessInfo.processInfo.environment
-            environment["PRIVATE_CLI_HOST_DATA_DIR"] = profileBase.path
             let result = try? CommandRunner.run(executable: "/bin/bash", arguments: [launcher.path, agent.rawValue, "status"],
                 directory: available ? project : FileManager.default.homeDirectoryForCurrentUser,
-                environment: environment, timeout: 8, outputLimit: 4096)
+                environment: agent.launcherEnvironment(profileBase: profileBase), timeout: 8, outputLimit: 4096)
             results.append(SetupCheck(id: "Authentication", passed: result?.status == 0,
                 summary: result?.status == 0 ? "Account check passed" : "Login needs attention",
                 action: "Choose Log in for this profile. Answer any trust or permission questions in the terminal."))

@@ -1,3 +1,17 @@
+# m4ix.CLI 0.18.0
+
+Adds Hermes Agent as a third provider. Choose Hermes in the toolbar to run it
+in the selected project, in a real terminal with the chat view, message
+field, History, restoration, and Your turn marks. Hermes runs from its own
+home and active profile, with its own memory, skills, and login; the app only
+reads that home. The message field sends only at Hermes's bare prompt: while
+Hermes works your message waits, and its approvals and questions bring the
+terminal forward without being answered. Log in opens Hermes's provider
+picker, and the reasoning menu applies to one session.
+
+Side by side stays Claude and Codex; choosing Hermes shows it alone. Shared
+chat's Send task to can start a reviewed Hermes conversation.
+
 # m4ix.CLI 0.17.0
 
 Shared chat can send an agreed task to Claude or Codex. Choose Send task to,

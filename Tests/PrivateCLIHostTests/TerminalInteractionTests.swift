@@ -363,16 +363,37 @@ final class TerminalInteractionTests: XCTestCase {
         let script = #"""
         #!/usr/bin/python3
         import json, os, sys, tty
-        if 'status' in sys.argv or 'login' in sys.argv:
+        claude = 'CLAUDE_CONFIG_DIR' in os.environ
+        hermes = 'HERMES_HOME' in os.environ and not claude and 'CODEX_HOME' not in os.environ
+        if 'config' in sys.argv:
+            print('nous')
+            sys.exit(0)
+        if 'status' in sys.argv or 'login' in sys.argv or sys.argv[1:] == ['model']:
             print('Fixture account ready')
             sys.exit(0)
         tty.setraw(0)
-        claude = 'CLAUDE_CONFIG_DIR' in os.environ
         rule = '─' * 60
         def write(text): os.write(1, text.encode())
         def prompt():
             write('\x1b[2J\x1b[H')
-            write(rule + '\r\n❯\r\n' + rule if claude else '› Ask anything\r\nModel status')
+            if hermes:
+                write(' ⚕ fixture │ ctx -- │ 1s\r\n' + rule + '\r\n❯\r\n' + rule)
+            else:
+                write(rule + '\r\n❯\r\n' + rule if claude else '› Ask anything\r\nModel status')
+        # Hermes 0.20.0's approval, as captured: boxed choices above an input
+        # it marks with ⚠ while the question is open.
+        hermes_approval = '\r\n'.join([
+            '╭─────────────────────────────────────────────────╮',
+            '│ ⚠  Dangerous Command                            │',
+            '│ rm -rf /tmp/m4ix-hermes-probe-never-created     │',
+            '│                                                 │',
+            '│ ❯ 1. Allow once                                 │',
+            '│   2. Allow for this session                     │',
+            '│   3. Add to permanent allowlist                 │',
+            '│   4. Deny                                       │',
+            '╰─────────────────────────────────────────────────╯',
+            '  ↑/↓ to select, Enter to confirm  (186s)',
+            ' ⚕ fixture │ ctx -- │ 1s', rule, '⚠ ❯', rule])
         write(''.join('History line %d\r\n' % n for n in range(250)))
         prompt()
         data = bytearray()
@@ -407,8 +428,11 @@ final class TerminalInteractionTests: XCTestCase {
                     waiting = 'queued'
                     data.clear()
                     continue
-                write('Trust this folder?\r\n❯ No, exit\r\n  Yes, trust it\r\nEnter to confirm · Esc to cancel'
-                      if claude else 'Approve command?\r\n› 1. Yes\r\n  2. No\r\nEnter to confirm · Esc to cancel')
+                if hermes:
+                    write(hermes_approval)
+                else:
+                    write('Trust this folder?\r\n❯ No, exit\r\n  Yes, trust it\r\nEnter to confirm · Esc to cancel'
+                          if claude else 'Approve command?\r\n› 1. Yes\r\n  2. No\r\nEnter to confirm · Esc to cancel')
                 waiting = True
             else:
                 with open(os.environ['HOST_TEST_FOCUS_CAPTURE'], 'w') as f:
@@ -421,9 +445,11 @@ final class TerminalInteractionTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         setenv("PRIVATE_CLI_HOST_CLAUDE_BIN", executable.path, 1)
         setenv("PRIVATE_CLI_HOST_CODEX_BIN", executable.path, 1)
+        setenv("PRIVATE_CLI_HOST_HERMES_BIN", executable.path, 1)
         addTeardownBlock {
             unsetenv("PRIVATE_CLI_HOST_CLAUDE_BIN")
             unsetenv("PRIVATE_CLI_HOST_CODEX_BIN")
+            unsetenv("PRIVATE_CLI_HOST_HERMES_BIN")
         }
         return root
     }

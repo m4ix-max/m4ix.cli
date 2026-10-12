@@ -17,7 +17,7 @@ final class HostedSessionTests: XCTestCase {
                 let previous = HostModel(defaults: defaults, profileBase: profile)
                 previous.openWorkspace(root)
                 previous.selected = agent
-                let savedIDs = Agent.allCases.map { _ in UUID().uuidString.lowercased() }
+                let savedIDs = Agent.allCases.map { $0 == .hermes ? "20261011_235540_a37dd0" : UUID().uuidString.lowercased() }
                 if hasHistory {
                     defaults.set(zip(Agent.allCases, savedIDs).map { provider, id in
                         ["project": root.path, "agent": provider.rawValue, "conversation": id,
@@ -41,7 +41,7 @@ final class HostedSessionTests: XCTestCase {
                 XCTAssertFalse(savedIDs.contains(fresh.activeConversationID ?? ""))
                 XCTAssertEqual(fresh.displayTitle, "New conversation")
                 let restored = model.liveSessionsForCurrentProject().filter { $0.id != fresh.id }
-                XCTAssertEqual(restored.count, hasHistory ? 2 : 0)
+                XCTAssertEqual(restored.count, hasHistory ? Agent.allCases.count : 0)
                 XCTAssertTrue(restored.allSatisfy { $0.state == .idle && savedIDs.contains($0.pendingResumeID ?? "") })
                 model.startOnLaunch()
                 XCTAssertEqual(model.currentSession.id, fresh.id)
@@ -102,6 +102,54 @@ final class HostedSessionTests: XCTestCase {
         let codexArguments = try XCTUnwrap(launches.first { $0.contains("resume") })
         XCTAssertTrue(codexArguments.contains(#"model="gpt-5.5""#), "\(codexArguments)")
         XCTAssertFalse(codexArguments.contains { $0.hasPrefix("model_reasoning_effort") })
+    }
+
+    func testHermesStartsAloneBindsItsBannerSessionAndResumesByThatID() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "m4ix.cli.hermes." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let capture = root.appendingPathComponent("hermes-launches.jsonl")
+        setenv("HOST_TEST_LAUNCH_CAPTURE", capture.path, 1)
+        defer { unsetenv("HOST_TEST_LAUNCH_CAPTURE") }
+        let model = HostModel(defaults: defaults, profileBase: root.appendingPathComponent("profiles"))
+        defer { model.stopAllSessions() }
+        model.openWorkspace(root)
+        model.isSplit = true
+        model.selected = .hermes
+        XCTAssertFalse(model.showsSideBySide, "Hermes has no side-by-side pane")
+        XCTAssertEqual(model.visibleSessions.map(\.agent), [.hermes])
+        model.setModelChoice(ModelChoice(effort: "high"), for: .hermes)
+
+        XCTAssertTrue(model.startNewConversation())
+        let hermes = model.currentSession
+        XCTAssertEqual(hermes.agent, .hermes)
+        XCTAssertEqual(hermes.profileDirectory, HermesHome.current(), "Hermes keeps its own home, not a private profile")
+        try await waitUntil { hermes.refreshPromptReadiness(); return hermes.acceptsPromptText }
+        try await waitUntil { _ = hermes.updateActivity(now: Date()); return hermes.activeConversationID != nil }
+        XCTAssertEqual(hermes.activeConversationID, "20261012_101500_c0ffee")
+        XCTAssertEqual(hermes.restorableConversationID, "20261012_101500_c0ffee")
+
+        let resumed = ConversationRecord(provider: "hermes", sessionID: "20261011_235540_a37dd0",
+                                         projectPath: model.workingDirectory.path, title: "Earlier research", updatedAt: Date())
+        model.openConversation(resumed)
+        let second = model.currentSession
+        try await waitUntil { second.refreshPromptReadiness(); return second.acceptsPromptText }
+        XCTAssertEqual(second.activeConversationID, "20261011_235540_a37dd0")
+
+        let launches = try String(contentsOf: capture, encoding: .utf8).split(separator: "\n").map { line in
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])["arguments"] as? [String] ?? []
+        }
+        XCTAssertEqual(launches, [["chat", "--cli", "--reasoning", "high"],
+                                  ["chat", "--cli", "--reasoning", "high", "--resume", "20261011_235540_a37dd0"]])
+
+        model.setSideBySide(true)
+        XCTAssertEqual(model.selected, .claude)
+        XCTAssertEqual(model.visibleSessions.map(\.agent), [.claude, .codex])
+        model.selected = .hermes
+        XCTAssertEqual(model.visibleSessions.map(\.id), [second.id], "Choosing Hermes shows it alone")
+        XCTAssertTrue(model.isSplit, "The side-by-side layout waits for Claude or Codex")
     }
 
     func testBothProvidersAcceptOnePromptWithoutOverlappingDelivery() async throws {
@@ -205,7 +253,7 @@ final class HostedSessionTests: XCTestCase {
 
         defer { unsetenv("HOST_TEST_CAPTURE") }
         var captures: [Agent: URL] = [:]
-        for agent in Agent.allCases {
+        for agent in Agent.sideBySide {
             let capture = root.appendingPathComponent("\(agent.rawValue).jsonl")
             captures[agent] = capture
             setenv("HOST_TEST_CAPTURE", capture.path, 1)
@@ -345,20 +393,26 @@ final class HostedSessionTests: XCTestCase {
         let script = #"""
         #!/usr/bin/python3
         import json, os, sys, tty
+        claude = 'CLAUDE_CONFIG_DIR' in os.environ
+        hermes = 'HERMES_HOME' in os.environ and not claude and 'CODEX_HOME' not in os.environ
         if '--version' in sys.argv:
-            print('2.1.287 (Claude Code)' if 'CLAUDE_CONFIG_DIR' in os.environ else 'codex-cli 0.159.3')
+            print('2.1.287 (Claude Code)' if claude else 'Hermes Agent v0.20.0 (2026.8.3)' if hermes else 'codex-cli 0.159.3')
             sys.exit(0)
-        if 'status' in sys.argv or 'login' in sys.argv:
+        if 'config' in sys.argv:
+            print('nous')
+            sys.exit(0)
+        if 'status' in sys.argv or 'login' in sys.argv or sys.argv[1:] == ['model']:
             print('Fixture account ready')
             sys.exit(0)
         if os.environ.get('HOST_TEST_LAUNCH_CAPTURE'):
             with open(os.environ['HOST_TEST_LAUNCH_CAPTURE'], 'a') as f:
                 f.write(json.dumps({'arguments': sys.argv[1:], 'cwd': os.getcwd()}) + '\n')
         tty.setraw(0)
-        claude = 'CLAUDE_CONFIG_DIR' in os.environ
         rule = '─' * 60
+        if hermes:
+            os.write(1, '│   Session: 20261012_101500_c0ffee   │\r\n'.encode())
         def screen():
-            text = ('\r\n' + rule + '\r\n❯\r\n' + rule + '\r\n') if claude else '\r\n› Ask anything\r\n'
+            text = ('\r\n' + rule + '\r\n❯\r\n' + rule + '\r\n') if claude or hermes else '\r\n› Ask anything\r\n'
             os.write(1, ('\x1b[?2004h' + text).encode())
         screen()
         content = bytearray()
@@ -378,9 +432,11 @@ final class HostedSessionTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         setenv("PRIVATE_CLI_HOST_CLAUDE_BIN", executable.path, 1)
         setenv("PRIVATE_CLI_HOST_CODEX_BIN", executable.path, 1)
+        setenv("PRIVATE_CLI_HOST_HERMES_BIN", executable.path, 1)
         addTeardownBlock {
             unsetenv("PRIVATE_CLI_HOST_CLAUDE_BIN")
             unsetenv("PRIVATE_CLI_HOST_CODEX_BIN")
+            unsetenv("PRIVATE_CLI_HOST_HERMES_BIN")
         }
         return root
     }

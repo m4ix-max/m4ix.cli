@@ -12,15 +12,75 @@ struct ConversationRecord: Identifiable, Equatable {
 }
 
 enum ConversationHistoryLoader {
-    static func load(profileBase: URL, cache: ConversationHistoryCache? = nil) -> [ConversationRecord] {
+    static func load(profileBase: URL, cache: ConversationHistoryCache? = nil,
+                     hermesHome: URL = HermesHome.current()) -> [ConversationRecord] {
         let codexProfile = profileBase.appendingPathComponent("codex", isDirectory: true)
         let claudeProfile = profileBase.appendingPathComponent("claude", isDirectory: true)
         let codex = loadCodexFromSQLite(codexProfile) ?? loadCodexFromRollouts(codexProfile)
         let claude = cache?.claude(profile: claudeProfile, loader: { loadClaude(claudeProfile) }) ?? loadClaude(claudeProfile)
-        return (codex + claude).sorted {
+        return (codex + claude + loadHermes(hermesHome)).sorted {
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
             return $0.id < $1.id
         }
+    }
+
+    // Hermes keeps every surface's sessions in one WAL-backed database. Only
+    // terminal conversations that ran in a folder belong to a project. When
+    // Hermes compresses a long conversation it continues in a child session,
+    // and resuming the first one leads there, so each chain is listed once.
+    static func loadHermes(_ home: URL) -> [ConversationRecord] {
+        let url = home.appendingPathComponent("state.db")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+              let database else {
+            if let database { sqlite3_close(database) }
+            return []
+        }
+        defer { sqlite3_close(database) }
+        sqlite3_busy_timeout(database, 500)
+
+        let sessionColumns = sqliteColumns(in: "sessions", database: database)
+        let messageColumns = sqliteColumns(in: "messages", database: database)
+        guard sessionColumns.isSuperset(of: ["id", "source", "cwd", "title", "parent_session_id", "end_reason", "archived"]),
+              messageColumns.isSuperset(of: ["id", "session_id", "role", "content", "timestamp"]) else { return [] }
+        let query = """
+            WITH RECURSIVE chain(root, id) AS (
+                SELECT id, id FROM sessions
+                WHERE IFNULL(parent_session_id, '') = '' AND source IN ('cli', 'tui')
+                  AND IFNULL(archived, 0) = 0 AND IFNULL(cwd, '') != ''
+                UNION
+                SELECT chain.root, child.id FROM sessions child
+                JOIN sessions parent ON child.parent_session_id = parent.id
+                JOIN chain ON parent.id = chain.id
+                WHERE parent.end_reason = 'compression'
+            ), activity(root, updated, prompts) AS (
+                SELECT chain.root, MAX(messages.timestamp), SUM(messages.role = 'user')
+                FROM chain JOIN messages ON messages.session_id = chain.id
+                GROUP BY chain.root
+            )
+            SELECT sessions.id, sessions.cwd, sessions.title,
+                   (SELECT content FROM messages WHERE session_id = sessions.id AND role = 'user' ORDER BY id LIMIT 1),
+                   activity.updated
+            FROM activity JOIN sessions ON sessions.id = activity.root
+            WHERE activity.prompts > 0
+            """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, query, -1, &statement, nil) == SQLITE_OK, let statement else { return [] }
+        defer { sqlite3_finalize(statement) }
+
+        var records: [ConversationRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let sessionID = sqliteText(statement, 0).lowercased()
+            guard Agent.hermes.isConversationID(sessionID),
+                  let projectPath = normalizedProjectPath(sqliteText(statement, 1)) else { continue }
+            let candidates: [String] = [sqliteText(statement, 2), sqliteText(statement, 3)].map { cleanTitle($0) }
+            let title: String = candidates.first(where: { !$0.isEmpty }) ?? "Hermes conversation"
+            let updatedAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 4))
+            records.append(ConversationRecord(provider: "hermes", sessionID: sessionID, projectPath: projectPath,
+                                              title: title, updatedAt: updatedAt))
+        }
+        return records
     }
 
     private struct ClaudeSession {

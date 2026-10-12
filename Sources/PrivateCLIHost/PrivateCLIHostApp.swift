@@ -10,10 +10,74 @@ import UserNotifications
 enum Agent: String, CaseIterable, Identifiable, Hashable {
     case claude
     case codex
+    case hermes
 
     var id: String { rawValue }
     var title: String { rawValue.capitalized }
-    var mark: PixelSprite { self == .claude ? .claude : .codex }
+    var mark: PixelSprite {
+        switch self {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .hermes: return .hermes
+        }
+    }
+
+    /// The providers that share the window side by side. Hermes is shown alone.
+    static let sideBySide: [Agent] = [.claude, .codex]
+
+    /// Claude and Codex name conversations with UUIDs. Hermes names them by
+    /// start time, as in `20261011_235540_a37dd0`.
+    func isConversationID(_ id: String) -> Bool {
+        switch self {
+        case .claude, .codex: return UUID(uuidString: id) != nil
+        case .hermes: return id.range(of: #"^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$"#, options: .regularExpression) != nil
+        }
+    }
+
+    /// Claude and Codex keep private profiles in the app's data folder.
+    /// Hermes keeps its own home, shared with its other surfaces.
+    func profileDirectory(in profileBase: URL) -> URL {
+        self == .hermes ? HermesHome.current() : profileBase.appendingPathComponent(rawValue, isDirectory: true)
+    }
+
+    /// The launcher's environment. Hermes gets the home this app reads its
+    /// sessions from, so History follows the conversations it starts.
+    func launcherEnvironment(profileBase: URL) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["PRIVATE_CLI_HOST_DATA_DIR"] = profileBase.path
+        if self == .hermes { environment["HERMES_HOME"] = HermesHome.current().path }
+        return environment
+    }
+}
+
+/// Hermes Agent's home, resolved as Hermes resolves it: `HERMES_HOME` or
+/// `~/.hermes`, switched to `profiles/<name>` once `hermes profile use` has
+/// made another profile active.
+enum HermesHome {
+    /// A test process never reads or launches the user's real Hermes.
+    static let testOverride: URL? = NSClassFromString("XCTestCase") == nil ? nil
+        : HostPaths.profileBase.appendingPathComponent("hermes-home", isDirectory: true)
+
+    static func current() -> URL {
+        testOverride ?? resolve(environment: ProcessInfo.processInfo.environment,
+                                userHome: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    static func resolve(environment: [String: String], userHome: URL) -> URL {
+        guard let value = environment["HERMES_HOME"], !value.isEmpty else {
+            return activeProfile(in: userHome.appendingPathComponent(".hermes", isDirectory: true))
+        }
+        let home = URL(fileURLWithPath: (value as NSString).expandingTildeInPath, isDirectory: true).standardizedFileURL
+        return home.deletingLastPathComponent().lastPathComponent == "profiles" ? home : activeProfile(in: home)
+    }
+
+    private static func activeProfile(in root: URL) -> URL {
+        guard let name = (try? String(contentsOf: root.appendingPathComponent("active_profile"), encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              name != "default",
+              name.range(of: #"^[a-z0-9][a-z0-9_-]{0,63}$"#, options: .regularExpression) != nil else { return root }
+        return root.appendingPathComponent("profiles", isDirectory: true).appendingPathComponent(name, isDirectory: true)
+    }
 }
 
 enum TerminalAction: String {
@@ -166,6 +230,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     let startedAt = Date()
     let initialPrompt: String?
     let terminal: TrackedTerminalView
+    let profileBase: URL
     let profileDirectory: URL
 
     @Published private(set) var conversationUpdatedAt: Date
@@ -182,6 +247,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// Whether the CLI's own input line holds the screen, so the prompt
     /// bar can type into it. Refreshed once a second while shown.
     @Published private(set) var acceptsPromptText = false
+    /// The CLI takes no message until its turn ends, as Hermes while it works.
+    @Published private(set) var waitsForTurn = false
     @Published private(set) var terminalResponseRequest: String?
     @Published private(set) var hasQueuedQuestions = false
     @Published private(set) var backgroundTerminalCount = 0
@@ -201,6 +268,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     @Published private(set) var isSendingPrompt = false
     @Published private(set) var promptRecovery: PromptRecovery?
     private var promptTask: Task<Void, Never>?
+    private var launchedAt: Date?
+    private var hermesQuestionOpen = false
 
     init(agent: Agent, projectPath: String, title: String, initialPrompt: String? = nil,
          pendingResumeID: String? = nil, profileBase: URL = HostPaths.profileBase, profileID: String = "default",
@@ -212,7 +281,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         self.initialPrompt = initialPrompt
         self.pendingResumeID = pendingResumeID?.lowercased()
         self.conversationUpdatedAt = updatedAt ?? (pendingResumeID == nil ? startedAt : .distantPast)
-        self.profileDirectory = profileBase.appendingPathComponent(agent.rawValue, isDirectory: true)
+        self.profileBase = profileBase
+        self.profileDirectory = agent.profileDirectory(in: profileBase)
         self.terminal = TrackedTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 520))
         super.init()
 
@@ -244,6 +314,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     /// Advances the turn detector. Returns true when a turn has just ended.
     func updateActivity(now: Date) -> Bool {
         guard state.isRunning else { return false }
+        bindHermesSessionFromBanner(now: now)
+        noteHermesQuestion()
         let ended = turns.update(outputAge: terminal.activity.outputAge(now: now), now: now)
         if isWorking != turns.isWorking { isWorking = turns.isWorking }
         return ended
@@ -268,9 +340,27 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         terminal.feed(text: "\u{1b}[?25l")
     }
 
+    /// Hermes sends no terminal notifications, so its approvals and questions
+    /// are read from the screen, once each, to mark the session for you.
+    private func noteHermesQuestion() {
+        guard agent == .hermes, hostsConversation else { return }
+        let open = CLIPrompt.terminalResponseRequest(screen: CLIPrompt.liveScreen(of: terminal), agent: .hermes) != nil
+        if open, !hermesQuestionOpen { pendingNotification = "Hermes is waiting for your answer." }
+        hermesQuestionOpen = open
+    }
+
+    /// Hermes prints its new session's ID in the banner it opens with. Reading
+    /// it there lets History and restoration find the conversation again.
+    private func bindHermesSessionFromBanner(now: Date) {
+        guard agent == .hermes, activeConversationID == nil, hostsConversation,
+              let launchedAt, now.timeIntervalSince(launchedAt) < 600 else { return }
+        let banner = String(decoding: terminal.getBufferAsData(kind: .active).prefix(262_144), as: UTF8.self)
+        if let id = CLIPrompt.hermesSessionID(in: banner) { bindConversationID(id) }
+    }
+
     func launch(_ action: TerminalAction, in directory: URL, sessionID: String? = nil, initialPrompt: String? = nil,
                 choice: ModelChoice = ModelChoice()) {
-        if action == .resume, sessionID.flatMap(UUID.init(uuidString:)) == nil {
+        if action == .resume, sessionID.map(agent.isConversationID) != true {
             return
         }
         guard state == .idle || state == .queued else { return }
@@ -305,6 +395,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         if hasQueuedQuestions != queuedQuestions { hasQueuedQuestions = queuedQuestions }
         let count = agent == .codex ? CLIPrompt.backgroundTerminalCount(in: screen) : 0
         if backgroundTerminalCount != count { backgroundTerminalCount = count }
+        let waits = state.isRunning && agent == .hermes && !ready && request == nil && CLIPrompt.hermesIsWorking(screen: screen)
+        if waitsForTurn != waits { waitsForTurn = waits }
         if acceptsPromptText != ready { acceptsPromptText = ready }
         if wasReady, ready, !isSendingPrompt, let queued = queuedPrompt {
             queuedPrompt = nil
@@ -395,11 +487,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
 
     private func screenAcceptsText() -> Bool {
         guard hostsConversation else { return false }
-        let screen = CLIPrompt.liveScreen(of: terminal)
-        switch agent {
-        case .claude: return CLIPrompt.claudeAcceptsText(screen: screen)
-        case .codex: return CLIPrompt.codexAcceptsText(screen: screen)
-        }
+        return CLIPrompt.acceptsText(screen: CLIPrompt.liveScreen(of: terminal), agent: agent)
     }
 
     func startIfPending() {
@@ -454,7 +542,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     func markQueued() { state = .queued }
 
     func bindConversationID(_ sessionID: String) {
-        guard UUID(uuidString: sessionID) != nil else { return }
+        guard agent.isConversationID(sessionID.lowercased()) else { return }
         activeConversationID = sessionID.lowercased()
         HostDiagnostics.record("session_identity_bound", agent: agent.rawValue, session: id)
     }
@@ -475,8 +563,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
             return
         }
 
-        var environment = ProcessInfo.processInfo.environment
-        environment["PRIVATE_CLI_HOST_DATA_DIR"] = profileDirectory.deletingLastPathComponent().path
+        var environment = agent.launcherEnvironment(profileBase: profileBase)
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         // Set or cleared on every launch, so a value in the app's own
@@ -484,6 +571,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         environment["PRIVATE_CLI_HOST_MODEL"] = choice.model
         environment["PRIVATE_CLI_HOST_EFFORT"] = choice.effort
         launchedDirectory = directory
+        launchedAt = Date()
         launchedChoice = choice
         pendingResumeID = nil
         activeConversationID = sessionID?.lowercased()
@@ -515,12 +603,10 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         let generation = accountStatusGeneration
         accountStatus = "Checking account"
         let agentName = agent.rawValue
-        let profileBasePath = profileDirectory.deletingLastPathComponent().path
+        let environment = agent.launcherEnvironment(profileBase: profileBase)
         let workingPath = directory.path
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            var environment = ProcessInfo.processInfo.environment
-            environment["PRIVATE_CLI_HOST_DATA_DIR"] = profileBasePath
             let status: String
             do {
                 let result = try CommandRunner.run(executable: "/bin/bash",
@@ -548,11 +634,14 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
 
     func openProfileInFinder() {
         do {
-            try FileManager.default.createDirectory(
-                at: profileDirectory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
+            // Hermes creates its own home on first run.
+            if agent != .hermes {
+                try FileManager.default.createDirectory(
+                    at: profileDirectory,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+            }
             NSWorkspace.shared.open(profileDirectory)
         } catch {
             accountStatus = "Could not open profile: \(error.localizedDescription)"
@@ -576,6 +665,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         if let queuedPrompt { promptRecovery = PromptRecovery(text: queuedPrompt.text, images: queuedPrompt.images) }
         queuedPrompt = nil
         acceptsPromptText = false
+        waitsForTurn = false
+        hermesQuestionOpen = false
         terminalResponseRequest = nil
         turns.reset()
         isWorking = false
@@ -888,7 +979,7 @@ final class HostModel: ObservableObject {
         Task { @MainActor [weak self] in
             let catalogs = await Task.detached(priority: .utility) {
                 Dictionary(uniqueKeysWithValues: Agent.allCases.map { agent in
-                    (agent, ModelCatalog.load(agent: agent, profileDirectory: base.appendingPathComponent(agent.rawValue, isDirectory: true)))
+                    (agent, ModelCatalog.load(agent: agent, profileDirectory: agent.profileDirectory(in: base)))
                 })
             }.value
             guard let self, self.profileBase == base, self.modelCatalogs != catalogs else { return }
@@ -943,10 +1034,18 @@ final class HostModel: ObservableObject {
     var activeSessionCount: Int { workspaces.values.flatMap(\.allSessions).filter { $0.state.isRunning }.count }
 
     var currentSession: TerminalSession { currentWorkspace.session(for: selected) }
+    /// Side by side holds Claude and Codex. Choosing Hermes shows it alone
+    /// and keeps the layout for the next time Claude or Codex is chosen.
+    var showsSideBySide: Bool { isSplit && Agent.sideBySide.contains(selected) }
+
+    func setSideBySide(_ shown: Bool) {
+        if shown, !Agent.sideBySide.contains(selected) { selected = .claude }
+        isSplit = shown
+    }
     /// The sessions on screen: the selected provider's, or each provider's
     /// when they are side by side.
     var visibleSessions: [TerminalSession] {
-        isSplit ? Agent.allCases.map { currentWorkspace.session(for: $0) } : [currentSession]
+        showsSideBySide ? Agent.sideBySide.map { currentWorkspace.session(for: $0) } : [currentSession]
     }
     var loginSession: TerminalSession { currentWorkspace.standbySession(for: selected) }
     var isCurrentProjectAvailable: Bool { ProjectRecord(path: workingDirectory.path).isAvailable }
@@ -1020,7 +1119,7 @@ final class HostModel: ObservableObject {
                   production.profiles.contains(where: { $0.id == profile }),
                   let agent = (entry["agent"] as? String).flatMap(Agent.init(rawValue:)),
                   let id = entry["conversation"] as? String,
-                  UUID(uuidString: id) != nil,
+                  agent.isConversationID(id.lowercased()),
                   ProjectRecord(path: path).isAvailable else { continue }
             let session = workspace(for: path, profileID: profile).restoreConversation(
                 for: agent,
@@ -1239,7 +1338,7 @@ final class HostModel: ObservableObject {
             let session = request.session
             preparingLaunches.insert(session.id)
             let directory = URL(fileURLWithPath: session.projectPath)
-            let base = session.profileDirectory.deletingLastPathComponent()
+            let base = session.profileBase
             let root = dataRoot
             Task { @MainActor [weak self, weak session] in
                 let metadata = await Task.detached(priority: .utility) {
@@ -1281,6 +1380,9 @@ final class HostModel: ObservableObject {
         guard workingDirectory.path == draft.projectPath, selectedProfileID == draft.profileID else {
             throw CommandError.failed("The selected project changed. Open a new handoff in the intended project.")
         }
+        guard let target = Agent.allCases.first(where: { $0.title == draft.target }) else {
+            throw CommandError.failed("The handoff names no known provider. No conversation was started.")
+        }
         let store = store ?? projectContextStore
         let context = try await store.load(path: draft.projectPath)
         let fullPrompt = context.brief.isEmpty ? prompt : prompt + "\n\nShared project brief:\n" + context.brief
@@ -1292,7 +1394,7 @@ final class HostModel: ObservableObject {
             throw CommandError.failed("The project changed while preparing the handoff. No conversation was started.")
         }
         let previous = selected
-        selected = draft.target == "Codex" ? .codex : .claude
+        selected = target
         guard startNewConversation(initialPrompt: fullPrompt) else {
             selected = previous
             try await store.updateHandoff(path: draft.projectPath, id: record.id, state: "Launch failed")
@@ -1827,7 +1929,8 @@ private struct PromptBar: View {
 
     private var mode: PromptComposer.Mode {
         guard session.hostsConversation else { return .start }
-        return session.acceptsPromptText ? .send : .blocked
+        if session.acceptsPromptText { return .send }
+        return session.waitsForTurn ? .waiting : .blocked
     }
 }
 
@@ -1942,18 +2045,22 @@ private struct WorkspaceBar: View {
                         let tint = model.selected == agent ? ElevateTheme.ink : ElevateTheme.graphite
                         HStack(spacing: ElevateTheme.spacing8) {
                             PixelMark(sprite: agent.mark, color: tint)
-                            Text(agent.title.uppercased())
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .font(ElevateTheme.utility(12, medium: true))
-                                .foregroundStyle(tint)
+                            // Narrow, the marks and the selection rule name the
+                            // providers and leave the room to the project.
+                            if !compact {
+                                Text(agent.title.uppercased())
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .font(ElevateTheme.utility(12, medium: true))
+                                    .foregroundStyle(tint)
+                            }
                             if model.selected != agent,
                                model.needsAttention(project: model.workingDirectory.path, agent: agent) {
                                 AttentionPixel()
                             }
                         }
                         .padding(.horizontal, 12)
-                        .frame(minWidth: 72, minHeight: 44)
+                        .frame(minWidth: compact ? 44 : 72, minHeight: 44)
                         .contentShape(Rectangle())
                         .overlay(alignment: .bottom) {
                             if model.selected == agent {
@@ -1971,18 +2078,18 @@ private struct WorkspaceBar: View {
             }
             .padding(.trailing, ElevateTheme.spacing8)
 
-            Button { model.isSplit.toggle() } label: {
-                Image(systemName: model.isSplit ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+            Button { model.setSideBySide(!model.showsSideBySide) } label: {
+                Image(systemName: model.showsSideBySide ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
                     .font(.system(size: 15))
-                    .foregroundStyle(model.isSplit ? ElevateTheme.ink : ElevateTheme.graphite)
+                    .foregroundStyle(model.showsSideBySide ? ElevateTheme.ink : ElevateTheme.graphite)
                     .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(ElevateHoverButtonStyle())
             .keyboardShortcut("\\", modifiers: .command)
-            .help(model.isSplit ? "Show one provider (⌘\\)" : "Show Claude and Codex side by side (⌘\\)")
+            .help(model.showsSideBySide ? "Show one provider (⌘\\)" : "Show Claude and Codex side by side (⌘\\)")
             .accessibilityLabel("Claude and Codex side by side")
-            .accessibilityAddTraits(model.isSplit ? [.isSelected] : [])
+            .accessibilityAddTraits(model.showsSideBySide ? [.isSelected] : [])
             .padding(.trailing, compact ? ElevateTheme.spacing8 : ElevateTheme.spacing16)
 
             ModelEffortMenu(model: model, session: session, compact: compact)
@@ -2070,7 +2177,8 @@ private struct WorkspaceBar: View {
             .padding(.trailing, ElevateTheme.spacing8)
 
             Menu {
-                Toggle("Claude and Codex side by side", isOn: $model.isSplit)
+                Toggle("Claude and Codex side by side", isOn: Binding(
+                    get: { model.showsSideBySide }, set: { model.setSideBySide($0) }))
                 Button("Shared chat with Claude and Codex…", action: onSharedChat)
                     .disabled(!model.isCurrentProjectAvailable)
                 Toggle("Show terminal instead of chat", isOn: showCLIInput)
@@ -2096,7 +2204,7 @@ private struct WorkspaceBar: View {
                 Button("Hand off to \(model.selected == .claude ? "Codex" : "Claude")…", action: onHandoff)
                     .disabled(!session.hostsConversation)
                 Divider()
-                Button("Open private profile") { session.openProfileInFinder() }
+                Button(session.agent == .hermes ? "Open Hermes home" : "Open private profile") { session.openProfileInFinder() }
                 Button("Show diagnostics in Finder") { HostDiagnostics.revealInFinder() }
             } label: {
                 Image(systemName: "ellipsis")
@@ -2555,7 +2663,7 @@ struct HostView: View {
                     showCLIInput: $showCLIInput,
                     onTerminal: { focusTerminal() }
                 )
-                if !model.isSplit, !model.currentSession.compatibility.usesComposer {
+                if !model.showsSideBySide, !model.currentSession.compatibility.usesComposer {
                     compatibilityBanner(model.currentSession)
                 }
                 if !production.drafts.isEmpty {
@@ -2565,7 +2673,7 @@ struct HostView: View {
                         Button("Review recovery") { showingProductionTools = true }
                     }.padding(.horizontal, 24).padding(.vertical, 4)
                 }
-                if model.isSplit {
+                if model.showsSideBySide {
                     HStack(spacing: 0) {
                         sessionPane(model.currentWorkspace.session(for: .claude), split: true)
                         Rectangle().fill(ElevateTheme.border).frame(width: ElevateTheme.hairlineWidth)

@@ -1,6 +1,6 @@
 # m4ix.CLI
 
-A small macOS app for Claude and Codex. It shows conversations in a chat view while running each installed command-line tool in a real terminal, with projects and conversation history in the sidebar. The app does not contain either CLI or any account credentials.
+A small macOS app for Claude, Codex, and Hermes Agent. It shows conversations in a chat view while running each installed command-line tool in a real terminal, with projects and conversation history in the sidebar. The app does not contain any of the CLIs or any account credentials.
 
 Open source under the MIT license. SwiftTerm retains its own MIT license;
 both notices are included in packaged apps. Claude and Codex are installed
@@ -10,7 +10,7 @@ The interface follows the NoA 2.0 Elevate design system: paper or ink surfaces t
 
 ## Build and open
 
-Install the Claude and Codex CLIs separately, then check that `claude` and `codex` resolve in a terminal. Build the app with:
+Install the Claude and Codex CLIs separately, then check that `claude` and `codex` resolve in a terminal. Hermes Agent is optional: install it and check that `hermes` resolves to use the third provider. Build the app with:
 
 ```sh
 bash Packaging/build-and-package.sh --install
@@ -47,7 +47,7 @@ remain in the sidebar as **Restored** and resume when selected.
 
    In terminal mode, each live terminal retains up to 10,000 lines of scrollback. Its persistent scrollbar uses a high contrast lime thumb to show your current position. It supports dragging, clicking the track, wheel scrolling, and keyboard/accessibility navigation. **Jump to latest** returns to the live output. Approvals, option menus, and confirmation prompts come into view and receive keyboard focus when they appear or when you return to their session. When the normal CLI prompt returns, focus moves back to the message field with its draft intact. A small footer shows the active keyboard destination. Scrolling through earlier output reveals the full terminal viewport; the CLI input is concealed only when you return to the bottom.
 
-   The History list shows both Claude and Codex sessions for this project. Each row says whether its CLI is **Working** or **Waiting**. Waiting means terminal output is quiet; it does not certify that a task succeeded. A session you are not looking at is marked **Your turn** with a lime pixel when its turn ends or its CLI asks for you, for example to approve a command. The pixel also appears on its project and provider, and the Dock icon counts the sessions waiting. When the app is in the background it also sends a macOS notification; click it to open that session. Looking at the session clears the mark. Claude's reminder a minute after a turn is skipped once you have seen the session. "Working" is read from the terminal: both CLIs redraw while they work and write nothing while idle. The explicit requests come from terminal notifications, which the launcher turns on for each session: Claude's `preferredNotifChannel` is passed with `--settings`, and Codex's `tui.notifications` with `-c`. Neither profile's files are changed.
+   The History list shows the Claude, Codex, and Hermes sessions for this project. Each row says whether its CLI is **Working** or **Waiting**. Waiting means terminal output is quiet; it does not certify that a task succeeded. A session you are not looking at is marked **Your turn** with a lime pixel when its turn ends or its CLI asks for you, for example to approve a command. The pixel also appears on its project and provider, and the Dock icon counts the sessions waiting. When the app is in the background it also sends a macOS notification; click it to open that session. Looking at the session clears the mark. Claude's reminder a minute after a turn is skipped once you have seen the session. "Working" is read from the terminal: the CLIs redraw while they work and write nothing while idle. The explicit requests come from terminal notifications, which the launcher turns on for each session: Claude's `preferredNotifChannel` is passed with `--settings`, and Codex's `tui.notifications` with `-c`. Neither profile's files are changed. Hermes sends no terminal notifications, so the app reads its approvals and questions from the screen.
 5. Live conversations are remembered every 30 seconds and on quit. On the next launch they return to **History** marked **Restored**, alongside the new blank conversation; each restored conversation resumes when you select it. Stopped sessions are not restored. Search or refresh the conversation list in the sidebar. Provider conversation files remain on disk; the sidebar no longer shows a separate Saved list.
 
 The toolbar shows the project, conversation title, provider, a model menu, and a compact **Activity** control.
@@ -67,11 +67,41 @@ The app sets `CLAUDE_CONFIG_DIR` for Claude and `CODEX_HOME` for Codex. Their pr
 ~/Library/Application Support/Private CLI Host/codex
 ```
 
-The launcher clears inherited Claude, Anthropic, Codex, and OpenAI environment variables before starting either CLI. This prevents credentials or endpoints from another terminal or desktop app from silently changing the intended login. When available, the launcher links the canonical `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md` instruction file into the corresponding private profile. It does not link credentials or settings.
+The launcher clears inherited Claude, Anthropic, Codex, and OpenAI environment variables before starting any CLI. This prevents credentials or endpoints from another terminal or desktop app from silently changing the intended login. When available, the launcher links the canonical `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md` instruction file into the corresponding private profile. It does not link credentials or settings.
 
 The sidebar reads conversation metadata from these private profiles. It does not copy transcripts into a second app database or mix in conversations from the ordinary Claude and Codex desktop profiles. The private profiles separate these CLI logins from the ordinary desktop apps. They are still in your macOS account and can access folders you grant them through normal filesystem permissions. This app provides one private profile per provider, not several accounts within one provider. Quitting the app gives hosted CLIs up to five seconds to stop, then force-stops any that remain; saved conversations remain available to resume on the next launch.
 
 New conversation prompts are delivered through the terminal after its input becomes ready. The app records uncertain delivery and offers draft recovery rather than silently discarding an interrupted message.
+
+
+## Hermes
+
+Select **Hermes** in the toolbar to work with Hermes Agent in the selected
+project. Unlike Claude and Codex, Hermes has no private profile here: it runs
+from its own home, `HERMES_HOME` or `~/.hermes`, and follows the profile
+`hermes profile use` made active, so its memory, skills, sessions, and
+provider login are the ones its other surfaces use. The app itself only reads
+that home: Hermes's session database names and orders conversations and
+supplies the chat view. **Log in** opens `hermes model`, Hermes's provider
+picker, and the account check reports `hermes auth status` for the
+configured provider.
+
+The launcher starts `hermes chat --cli`, the classic interface the message
+field reads, whatever Hermes's default is. Hermes shows a bare `❯` only while
+it waits for a message, so the message field sends only then. While Hermes
+works, its input reads `⚕ ❯` and your message waits in the field. Approvals,
+confirmations, and questions mark the input (`⚠ ❯`, `? ❯`) and number their
+choices inside a panel; the terminal comes forward for them, and a session
+you are not looking at is marked **Your turn**. Each new conversation's ID
+is read from the banner Hermes opens with, so it can be restored after a
+restart and resumed with `--resume`. The reasoning menu passes `--reasoning`
+for one session; models stay with `hermes model`, because their names change
+with the provider.
+
+Side by side holds Claude and Codex. Choosing Hermes shows it alone and keeps
+the layout for when Claude or Codex is chosen again. Shared chat is a
+discussion between Claude and Codex, but **Send task to → Hermes** starts a
+reviewed implementation conversation with Hermes.
 
 
 ## Claude and Codex together
@@ -146,6 +176,12 @@ The verification opens a temporary app session, uses a separate UI preferences s
 `M4IX_SPEECH_TESTS=1 swift test --disable-sandbox --filter DictationTests` transcribes synthesized speech through the dictation recognizer with both on-device models. It needs macOS 26 and the English speech assets, and never opens the microphone.
 
 `M4IX_REAL_CLI_TESTS=1 swift test --disable-sandbox --filter RealCLISmokeTests` also verifies live providers through the SwiftPM build. These tests are skipped in CI, which uses inert CLI fixtures for terminal lifecycle and prompt delivery checks.
+
+`M4IX_HERMES_LIVE_TESTS=1 swift test --disable-sandbox --filter HermesTests/testInstalledHermesStartsAnswersAndRaisesItsApprovalInTheHost`
+runs the installed Hermes through the launcher and a hosted terminal against a
+local test model that asks to run a command, in a throwaway Hermes home. It
+checks the banner's session ID, sending, the approval that must not be
+answered, the denial, and the conversation in History and the chat view.
 
 `M4IX_SHARED_CHAT_LIVE_TESTS=1 swift test --disable-sandbox --filter SharedChatTests/testAuthenticatedProvidersExchangeAndResumeReplies`
 checks four real shared-chat replies, including resuming both providers. It

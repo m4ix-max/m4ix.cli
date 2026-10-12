@@ -48,8 +48,11 @@ struct ModelOption: Identifiable, Hashable, Sendable {
 struct ModelCatalog: Equatable, Sendable {
     var options: [ModelOption]
     var defaultModel: String?
+    /// Levels offered when no models are listed to choose from.
+    var defaultEfforts: [String] = []
 
     static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
+    static let hermesEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 
     static func effortTitle(_ effort: String) -> String {
         switch effort {
@@ -66,7 +69,7 @@ struct ModelCatalog: Equatable, Sendable {
     /// model's levels, or the levels every listed model shares.
     func efforts(for model: String?) -> [String] {
         if let option = options.first(where: { $0.id == (model ?? defaultModel) }) { return option.efforts }
-        guard let first = options.first else { return [] }
+        guard let first = options.first else { return defaultEfforts }
         return first.efforts.filter { effort in options.allSatisfy { $0.efforts.contains(effort) } }
     }
 
@@ -99,7 +102,42 @@ struct ModelCatalog: Equatable, Sendable {
             }
             let config = (try? String(contentsOf: profileDirectory.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
             return ModelCatalog(options: options, defaultModel: topLevelTOMLString("model", in: config))
+        case .hermes:
+            // Hermes's models are named by provider, `anthropic/claude-fable-5.1`,
+            // and change with it, so they stay with `hermes model`. Its
+            // reasoning levels apply to whichever model it runs.
+            let config = (try? String(contentsOf: profileDirectory.appendingPathComponent("config.yaml"), encoding: .utf8)) ?? ""
+            return ModelCatalog(options: [], defaultModel: hermesDefaultModel(in: config), defaultEfforts: hermesEfforts)
         }
+    }
+
+    /// Reads `default:` from the top-level `model:` block, or a bare
+    /// `model: name`. Anything else leaves the default unnamed.
+    static func hermesDefaultModel(in text: String) -> String? {
+        var inModel = false
+        for line in text.components(separatedBy: .newlines) {
+            let isIndented = line.first == " " || line.first == "\t"
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if !isIndented {
+                guard trimmed.hasPrefix("model:") else { inModel = false; continue }
+                let value = unquoted(String(trimmed.dropFirst(6)))
+                if !value.isEmpty { return value }
+                inModel = true
+            } else if inModel, trimmed.hasPrefix("default:") {
+                let value = unquoted(String(trimmed.dropFirst(8)))
+                return value.isEmpty ? nil : value
+            }
+        }
+        return nil
+    }
+
+    private static func unquoted(_ value: String) -> String {
+        var text = value.trimmingCharacters(in: .whitespaces)
+        if text.count >= 2, let first = text.first, first == text.last, first == "\"" || first == "'" {
+            text = String(text.dropFirst().dropLast())
+        }
+        return text
     }
 
     /// Reads `key = "value"` before the first table header. Enough for the
