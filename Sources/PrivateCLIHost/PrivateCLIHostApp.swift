@@ -23,9 +23,9 @@ enum Agent: String, CaseIterable, Identifiable, Hashable {
     }
     var tint: SwiftUI.Color {
         switch self {
-        case .claude: return ElevateTheme.claude
-        case .codex: return ElevateTheme.codex
-        case .hermes: return ElevateTheme.ink
+        case .claude: return HostTheme.claude
+        case .codex: return HostTheme.codex
+        case .hermes: return HostTheme.ink
         }
     }
 
@@ -317,9 +317,9 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         terminal.changeScrollback(10_000)
         terminal.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         terminal.lineSpacing = 1.3
-        terminal.nativeForegroundColor = ElevateTheme.terminalForeground
-        terminal.nativeBackgroundColor = ElevateTheme.terminalBackground
-        terminal.caretColor = ElevateTheme.nsSignal
+        terminal.nativeForegroundColor = HostTheme.terminalForeground
+        terminal.nativeBackgroundColor = HostTheme.terminalBackground
+        terminal.caretColor = HostTheme.nsSignal
         terminal.bellStyle = .none
         hideCaret()
 
@@ -1846,17 +1846,17 @@ final class TerminalDeckView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = ElevateTheme.terminalBackground.cgColor
+        layer?.backgroundColor = HostTheme.terminalBackground.cgColor
         promptCover.wantsLayer = true
-        promptCover.layer?.backgroundColor = ElevateTheme.terminalBackground.cgColor
+        promptCover.layer?.backgroundColor = HostTheme.terminalBackground.cgColor
         promptCover.isHidden = true
         addSubview(promptCover)
         scrollbar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrollbar)
         NSLayoutConstraint.activate([
-            scrollbar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -ElevateTheme.spacing16),
-            scrollbar.topAnchor.constraint(equalTo: topAnchor, constant: ElevateTheme.spacing16),
-            scrollbar.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -ElevateTheme.spacing16),
+            scrollbar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -HostTheme.spacing16),
+            scrollbar.topAnchor.constraint(equalTo: topAnchor, constant: HostTheme.spacing16),
+            scrollbar.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -HostTheme.spacing16),
             scrollbar.widthAnchor.constraint(equalToConstant: 18)
         ])
         scrollbar.onScroll = { [weak self] position in
@@ -1957,10 +1957,10 @@ final class TerminalDeckView: NSView {
         addSubview(terminal, positioned: .below, relativeTo: promptCover)
         // The deck shares the terminal's background, so the inset reads as margin.
         terminalConstraints = [
-            terminal.leadingAnchor.constraint(equalTo: leadingAnchor, constant: ElevateTheme.spacing24),
+            terminal.leadingAnchor.constraint(equalTo: leadingAnchor, constant: HostTheme.spacing24),
             terminal.trailingAnchor.constraint(equalTo: scrollbar.leadingAnchor),
-            terminal.topAnchor.constraint(equalTo: topAnchor, constant: ElevateTheme.spacing16),
-            terminal.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -ElevateTheme.spacing16)
+            terminal.topAnchor.constraint(equalTo: topAnchor, constant: HostTheme.spacing16),
+            terminal.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -HostTheme.spacing16)
         ]
         NSLayoutConstraint.activate(terminalConstraints)
         if !hidesPrompt, takesAutomaticFocus, window != nil { window?.makeFirstResponder(terminal) }
@@ -2022,12 +2022,12 @@ private struct PromptBar: View {
             if let recovery = session.promptRecovery {
                 HStack {
                     Text("Prompt delivery was interrupted. Check the terminal before resending.")
-                        .font(.callout).foregroundStyle(ElevateTheme.ink)
+                        .font(.callout).foregroundStyle(HostTheme.ink)
                     Spacer()
                     Button("Restore draft") { onRecover(recovery); session.clearPromptRecovery() }
                     Button("Dismiss") { session.clearPromptRecovery() }
                 }
-                .padding(12).background(ElevateTheme.paperDeep)
+                .padding(12).background(HostTheme.paperDeep)
             }
         PromptComposer(
             text: text,
@@ -2083,35 +2083,35 @@ private struct PaneHeader: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(spacing: ElevateTheme.spacing8) {
-                PixelMark(sprite: session.agent.mark, color: isActive ? ElevateTheme.ink : ElevateTheme.graphite)
+            HStack(spacing: HostTheme.spacing8) {
+                PixelMark(sprite: session.agent.mark, color: isActive ? HostTheme.ink : HostTheme.graphite)
                 Text(session.agent.title.uppercased())
-                    .font(ElevateTheme.utility(11, medium: true))
-                    .foregroundStyle(isActive ? ElevateTheme.ink : ElevateTheme.graphite)
+                    .font(HostTheme.utility(11, medium: true))
+                    .foregroundStyle(isActive ? HostTheme.ink : HostTheme.graphite)
                     .fixedSize()
                 Text(title)
                     .font(.system(size: 11))
-                    .foregroundStyle(ElevateTheme.graphite)
+                    .foregroundStyle(HostTheme.graphite)
                     .lineLimit(1)
-                Spacer(minLength: ElevateTheme.spacing8)
+                Spacer(minLength: HostTheme.spacing8)
                 Text(status)
-                    .font(ElevateTheme.utility(10))
+                    .font(HostTheme.utility(10))
                     .tracking(0.2)
-                    .foregroundStyle(ElevateTheme.graphite)
+                    .foregroundStyle(HostTheme.graphite)
                     .fixedSize()
             }
-            .padding(.horizontal, ElevateTheme.spacing24)
+            .padding(.horizontal, HostTheme.spacing24)
             .frame(height: 36)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ElevateTheme.paper)
+            .background(HostTheme.paper)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(isActive ? ElevateTheme.ink : ElevateTheme.borderSubtle)
-                    .frame(height: isActive ? 2 : ElevateTheme.hairlineWidth)
+                    .fill(isActive ? HostTheme.ink : HostTheme.borderSubtle)
+                    .frame(height: isActive ? 2 : HostTheme.hairlineWidth)
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(ElevateHoverButtonStyle())
+        .buttonStyle(HoverButtonStyle())
         .help(isActive ? "\(session.agent.title) has the keyboard" : "Use \(session.agent.title)")
         .accessibilityLabel("\(session.agent.title), \(title), \(status.capitalized)")
         .accessibilityAddTraits(isActive ? [.isSelected] : [])
@@ -2144,24 +2144,24 @@ private struct WorkspaceBar: View {
             Button(action: onToggleSidebar) {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(ElevateTheme.ink)
+                    .foregroundStyle(HostTheme.ink)
                     .frame(width: 40, height: 44)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(ElevateHoverButtonStyle())
+            .buttonStyle(HoverButtonStyle())
             .accessibilityLabel(sidebarVisible ? "Hide sidebar" : "Show sidebar")
             .help(sidebarVisible ? "Hide sidebar" : "Show sidebar")
-            .padding(.trailing, ElevateTheme.spacing16)
+            .padding(.trailing, HostTheme.spacing16)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.workingDirectory.lastPathComponent)
-                    .font(ElevateTheme.serif(compact ? 18 : 21))
-                    .foregroundStyle(ElevateTheme.ink)
+                    .font(HostTheme.serif(compact ? 18 : 21))
+                    .foregroundStyle(HostTheme.ink)
                     .lineLimit(1)
                     .help(model.workingDirectory.path)
                 Text("\(model.production.name(for: model.selectedProfileID)) · \(session.hostsConversation ? session.displayTitle : "New conversation")")
                     .font(.system(size: 11))
-                    .foregroundStyle(ElevateTheme.graphite)
+                    .foregroundStyle(HostTheme.graphite)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2169,8 +2169,8 @@ private struct WorkspaceBar: View {
             HStack(spacing: 0) {
                 ForEach(Agent.allCases) { agent in
                     Button { model.selected = agent } label: {
-                        let tint = model.selected == agent ? ElevateTheme.ink : ElevateTheme.graphite
-                        HStack(spacing: ElevateTheme.spacing8) {
+                        let tint = model.selected == agent ? HostTheme.ink : HostTheme.graphite
+                        HStack(spacing: HostTheme.spacing8) {
                             PixelMark(sprite: agent.mark, color: tint)
                             // Narrow, the marks and the selection rule name the
                             // providers and leave the room to the project.
@@ -2178,7 +2178,7 @@ private struct WorkspaceBar: View {
                                 Text(agent.title.uppercased())
                                     .lineLimit(1)
                                     .fixedSize(horizontal: true, vertical: false)
-                                    .font(ElevateTheme.utility(12, medium: true))
+                                    .font(HostTheme.utility(12, medium: true))
                                     .foregroundStyle(tint)
                             }
                             if model.selected != agent,
@@ -2192,32 +2192,32 @@ private struct WorkspaceBar: View {
                         .overlay(alignment: .bottom) {
                             if model.selected == agent {
                                 Rectangle()
-                                    .fill(ElevateTheme.ink)
+                                    .fill(HostTheme.ink)
                                     .frame(height: 2)
                             }
                         }
                     }
-                    .buttonStyle(ElevateHoverButtonStyle())
+                    .buttonStyle(HoverButtonStyle())
                     .accessibilityLabel(agent.title)
                     .help(model.selected == agent ? "Using \(agent.title)" : "Switch to \(agent.title)")
                     .accessibilityAddTraits(model.selected == agent ? [.isSelected] : [])
                 }
             }
-            .padding(.trailing, ElevateTheme.spacing8)
+            .padding(.trailing, HostTheme.spacing8)
 
             Button { model.setSideBySide(!model.showsSideBySide) } label: {
                 Image(systemName: model.showsSideBySide ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
                     .font(.system(size: 15))
-                    .foregroundStyle(model.showsSideBySide ? ElevateTheme.ink : ElevateTheme.graphite)
+                    .foregroundStyle(model.showsSideBySide ? HostTheme.ink : HostTheme.graphite)
                     .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(ElevateHoverButtonStyle())
+            .buttonStyle(HoverButtonStyle())
             .keyboardShortcut("\\", modifiers: .command)
             .help(model.showsSideBySide ? "Show one provider (⌘\\)" : "Show Claude and Codex side by side (⌘\\)")
             .accessibilityLabel("Claude and Codex side by side")
             .accessibilityAddTraits(model.showsSideBySide ? [.isSelected] : [])
-            .padding(.trailing, compact ? ElevateTheme.spacing8 : ElevateTheme.spacing16)
+            .padding(.trailing, compact ? HostTheme.spacing8 : HostTheme.spacing16)
 
             ModelEffortMenu(model: model, session: session, compact: compact)
                 .padding(.trailing, 8)
@@ -2227,7 +2227,7 @@ private struct WorkspaceBar: View {
                     Image(systemName: "bubble.left.and.bubble.right").font(.system(size: 15))
                         .frame(width: 36, height: 44)
                 }
-                .buttonStyle(ElevateHoverButtonStyle())
+                .buttonStyle(HoverButtonStyle())
                 .accessibilityLabel("Shared chat with Claude and Codex")
                 .help("Talk with Claude and Codex in one shared discussion")
                 .disabled(!model.isCurrentProjectAvailable)
@@ -2248,13 +2248,13 @@ private struct WorkspaceBar: View {
                 Button("Terminal controls", action: onTerminal)
             } label: {
                 HStack(spacing: 6) {
-                    Circle().fill(session.isWorking ? ElevateTheme.signal : ElevateTheme.graphite).frame(width: 5, height: 5)
+                    Circle().fill(session.isWorking ? HostTheme.signal : HostTheme.graphite).frame(width: 5, height: 5)
                     Text(activityTitle).font(.system(size: 11))
                     if session.backgroundTerminalCount > 0 {
                         Text("· \(session.backgroundTerminalCount)").font(.system(size: 11))
                     }
                 }
-                .foregroundStyle(ElevateTheme.graphite)
+                .foregroundStyle(HostTheme.graphite)
                 .padding(.horizontal, 10)
             }
             .menuStyle(.borderlessButton)
@@ -2266,18 +2266,18 @@ private struct WorkspaceBar: View {
             Button(action: onProjectTools) {
                 Image(systemName: "square.stack.3d.up")
                     .font(.system(size: 17))
-                    .foregroundStyle(ElevateTheme.ink)
+                    .foregroundStyle(HostTheme.ink)
                     .frame(width: 44, height: 44)
             }
-            .buttonStyle(ElevateHoverButtonStyle())
+            .buttonStyle(HoverButtonStyle())
             .help("Project brief, tasks, and Git workspaces")
             .accessibilityLabel("Project tools")
             .disabled(!model.isCurrentProjectAvailable)
-            .padding(.trailing, ElevateTheme.spacing8)
+            .padding(.trailing, HostTheme.spacing8)
 
             Button(action: onProductionTools) {
                 Image(systemName: "slider.horizontal.3").font(.system(size: 17)).frame(width: 36, height: 44)
-            }.buttonStyle(ElevateHoverButtonStyle()).help("Changes, checks, workflows, and app controls")
+            }.buttonStyle(HoverButtonStyle()).help("Changes, checks, workflows, and app controls")
                 .accessibilityLabel("Workspace tools").keyboardShortcut("k", modifiers: [.command, .shift])
 
             Button(action: onNewConversation) {
@@ -2286,22 +2286,22 @@ private struct WorkspaceBar: View {
                         .font(.system(size: 12, weight: .semibold))
                     if !compact {
                         Text("NEW CONVERSATION")
-                            .font(ElevateTheme.utility(11, medium: true))
+                            .font(HostTheme.utility(11, medium: true))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                 }
-                .foregroundStyle(ElevateTheme.onSignal)
-                .padding(.horizontal, ElevateTheme.spacing16)
+                .foregroundStyle(HostTheme.onSignal)
+                .padding(.horizontal, HostTheme.spacing16)
                 .frame(height: 44)
-                .background(ElevateTheme.signal, in: RoundedRectangle(cornerRadius: ElevateTheme.controlRadius))
+                .background(HostTheme.signal, in: RoundedRectangle(cornerRadius: HostTheme.controlRadius))
             }
-            .buttonStyle(ElevateHoverButtonStyle())
+            .buttonStyle(HoverButtonStyle())
             .disabled(!model.isCurrentProjectAvailable)
             .accessibilityLabel("New conversation")
             .help("Start a blank \(model.selected.title) conversation (⌘N)")
             .keyboardShortcut("n", modifiers: .command)
-            .padding(.trailing, ElevateTheme.spacing8)
+            .padding(.trailing, HostTheme.spacing8)
 
             Menu {
                 Toggle("Claude and Codex side by side", isOn: Binding(
@@ -2336,7 +2336,7 @@ private struct WorkspaceBar: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(ElevateTheme.ink)
+                    .foregroundStyle(HostTheme.ink)
                     .frame(width: 40, height: 44)
                     .contentShape(Rectangle())
             }
@@ -2345,12 +2345,12 @@ private struct WorkspaceBar: View {
             .help("Session actions")
         }
         .frame(height: 68)
-        .padding(.horizontal, ElevateTheme.spacing24)
+        .padding(.horizontal, HostTheme.spacing24)
         }
         .frame(height: 68)
-        .background(ElevateTheme.paper)
+        .background(HostTheme.paper)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(ElevateTheme.borderSubtle).frame(height: ElevateTheme.hairlineWidth)
+            Rectangle().fill(HostTheme.borderSubtle).frame(height: HostTheme.hairlineWidth)
         }
     }
 }
@@ -2416,7 +2416,7 @@ private struct ModelEffortMenu: View {
                 Image(systemName: "cpu").font(.system(size: 12))
                 if !compact { Text(summary(choice)).font(.system(size: 11)).lineLimit(1) }
             }
-            .foregroundStyle(ElevateTheme.graphite)
+            .foregroundStyle(HostTheme.graphite)
             .padding(.horizontal, 10)
         }
         .menuStyle(.borderlessButton)
@@ -2445,16 +2445,16 @@ private struct ProjectSidebar: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Text("m4ix.CLI")
-                    .font(ElevateTheme.utility(14, medium: true))
+                    .font(HostTheme.utility(14, medium: true))
                     .tracking(0.28)
                     .textCase(.uppercase)
-                    .foregroundStyle(ElevateTheme.ink)
+                    .foregroundStyle(HostTheme.ink)
                 Spacer()
             }
-            .padding(.horizontal, ElevateTheme.spacing24)
+            .padding(.horizontal, HostTheme.spacing24)
             .frame(height: 68)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(ElevateTheme.border).frame(height: ElevateTheme.hairlineWidth)
+                Rectangle().fill(HostTheme.border).frame(height: HostTheme.hairlineWidth)
             }
 
             HStack {
@@ -2463,18 +2463,18 @@ private struct ProjectSidebar: View {
                 Button(action: model.addProject) {
                     Image(systemName: "plus")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ElevateTheme.ink)
+                        .foregroundStyle(HostTheme.ink)
                         .frame(width: 36, height: 36)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(ElevateHoverButtonStyle())
+                .buttonStyle(HoverButtonStyle())
                 .accessibilityLabel("Add project")
                 .help("Add project folder")
             }
-            .padding(.leading, ElevateTheme.spacing24)
+            .padding(.leading, HostTheme.spacing24)
             .padding(.trailing, 12)
-            .padding(.top, ElevateTheme.spacing24)
-            .padding(.bottom, ElevateTheme.spacing8)
+            .padding(.top, HostTheme.spacing24)
+            .padding(.bottom, HostTheme.spacing8)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -2482,10 +2482,10 @@ private struct ProjectSidebar: View {
                 }
             }
             .frame(maxHeight: 144)
-            .padding(.horizontal, ElevateTheme.spacing16)
-            .padding(.bottom, ElevateTheme.spacing16)
+            .padding(.horizontal, HostTheme.spacing16)
+            .padding(.bottom, HostTheme.spacing16)
 
-            Rectangle().fill(ElevateTheme.border).frame(height: ElevateTheme.hairlineWidth)
+            Rectangle().fill(HostTheme.border).frame(height: HostTheme.hairlineWidth)
 
             HStack {
                 sectionLabel("CONVERSATIONS")
@@ -2493,42 +2493,42 @@ private struct ProjectSidebar: View {
                 Button { model.refreshHistory() } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(ElevateTheme.graphite)
+                        .foregroundStyle(HostTheme.graphite)
                         .frame(width: 36, height: 36)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(ElevateHoverButtonStyle())
+                .buttonStyle(HoverButtonStyle())
                 .accessibilityLabel("Refresh conversations")
                 .help("Refresh conversations")
             }
-            .padding(.leading, ElevateTheme.spacing24)
+            .padding(.leading, HostTheme.spacing24)
             .padding(.trailing, 12)
-            .padding(.top, ElevateTheme.spacing16)
-            .padding(.bottom, ElevateTheme.spacing8)
+            .padding(.top, HostTheme.spacing16)
+            .padding(.bottom, HostTheme.spacing8)
 
-            HStack(spacing: ElevateTheme.spacing8) {
+            HStack(spacing: HostTheme.spacing8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(ElevateTheme.graphite)
+                    .foregroundStyle(HostTheme.graphite)
                 TextField("Search conversations", text: $searchText)
-                    .font(ElevateTheme.serif(14))
-                    .foregroundStyle(ElevateTheme.ink)
+                    .font(HostTheme.serif(14))
+                    .foregroundStyle(HostTheme.ink)
                     .textFieldStyle(.plain)
                     .accessibilityLabel("Search conversations")
             }
             .padding(.horizontal, 12)
             .frame(height: 40)
-            .background(ElevateTheme.paperDeep, in: RoundedRectangle(cornerRadius: ElevateTheme.controlRadius))
-            .padding(.horizontal, ElevateTheme.spacing24)
-            .padding(.bottom, ElevateTheme.spacing8)
+            .background(HostTheme.paperDeep, in: RoundedRectangle(cornerRadius: HostTheme.controlRadius))
+            .padding(.horizontal, HostTheme.spacing24)
+            .padding(.bottom, HostTheme.spacing8)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if !visibleLiveSessions.isEmpty {
                         sectionLabel("HISTORY")
-                            .padding(.horizontal, ElevateTheme.spacing8)
-                            .padding(.top, ElevateTheme.spacing8)
-                            .padding(.bottom, ElevateTheme.spacing8)
+                            .padding(.horizontal, HostTheme.spacing8)
+                            .padding(.top, HostTheme.spacing8)
+                            .padding(.bottom, HostTheme.spacing8)
                         ForEach(visibleLiveSessions) { session in
                             LiveConversationRow(
                                 session: session,
@@ -2541,29 +2541,29 @@ private struct ProjectSidebar: View {
                         }
                     }
                     if visibleLiveSessions.isEmpty {
-                        VStack(alignment: .leading, spacing: ElevateTheme.spacing8) {
+                        VStack(alignment: .leading, spacing: HostTheme.spacing8) {
                             Text(searchText.isEmpty ? "No conversations yet" : "No matches")
-                                .font(ElevateTheme.serif(16))
-                                .foregroundStyle(ElevateTheme.graphite)
+                                .font(HostTheme.serif(16))
+                                .foregroundStyle(HostTheme.graphite)
                             if searchText.isEmpty {
                                 Text("Your \(model.selected.title) work in this project will appear here.")
-                                    .font(ElevateTheme.serif(13))
-                                    .foregroundStyle(ElevateTheme.graphite)
+                                    .font(HostTheme.serif(13))
+                                    .foregroundStyle(HostTheme.graphite)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        .padding(.horizontal, ElevateTheme.spacing8)
-                        .padding(.top, ElevateTheme.spacing16)
+                        .padding(.horizontal, HostTheme.spacing8)
+                        .padding(.top, HostTheme.spacing16)
                     }
                 }
-                .padding(.horizontal, ElevateTheme.spacing16)
-                .padding(.bottom, ElevateTheme.spacing16)
+                .padding(.horizontal, HostTheme.spacing16)
+                .padding(.bottom, HostTheme.spacing16)
             }
         }
         .frame(width: 282)
-        .background(ElevateTheme.paper)
+        .background(HostTheme.paper)
         .overlay(alignment: .trailing) {
-            Rectangle().fill(ElevateTheme.border).frame(width: ElevateTheme.hairlineWidth)
+            Rectangle().fill(HostTheme.border).frame(width: HostTheme.hairlineWidth)
         }
         .onChange(of: model.selected) { _ in searchText = "" }
         .onChange(of: model.workingDirectory) { _ in searchText = "" }
@@ -2571,18 +2571,18 @@ private struct ProjectSidebar: View {
 
     private func sectionLabel(_ title: String) -> some View {
         Text(title)
-            .font(ElevateTheme.utility(11, medium: true))
+            .font(HostTheme.utility(11, medium: true))
             .tracking(0.22)
-            .foregroundStyle(ElevateTheme.graphite)
+            .foregroundStyle(HostTheme.graphite)
     }
 
     private func projectRow(_ project: ProjectRecord) -> some View {
         let isSelected = project.path == model.workingDirectory.path
         return Button { model.selectProject(project) } label: {
-            HStack(spacing: ElevateTheme.spacing8) {
+            HStack(spacing: HostTheme.spacing8) {
                 Text(project.name)
-                    .font(ElevateTheme.serif(16))
-                    .foregroundStyle(project.isAvailable ? ElevateTheme.ink : ElevateTheme.graphite)
+                    .font(HostTheme.serif(16))
+                    .foregroundStyle(project.isAvailable ? HostTheme.ink : HostTheme.graphite)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if model.needsAttention(project: project.path) {
@@ -2591,19 +2591,19 @@ private struct ProjectSidebar: View {
                 if !project.isAvailable {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 12))
-                        .foregroundStyle(ElevateTheme.graphite)
+                        .foregroundStyle(HostTheme.graphite)
                 }
             }
-            .padding(.horizontal, ElevateTheme.spacing8)
+            .padding(.horizontal, HostTheme.spacing8)
             .frame(height: 44)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? ElevateTheme.paperDeep : ElevateTheme.paper)
+            .background(isSelected ? HostTheme.paperDeep : HostTheme.paper)
             .overlay(alignment: .leading) {
-                if isSelected { Rectangle().fill(ElevateTheme.ink).frame(width: 2) }
+                if isSelected { Rectangle().fill(HostTheme.ink).frame(width: 2) }
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(ElevateHoverButtonStyle())
+        .buttonStyle(HoverButtonStyle())
         .help(project.path)
         .accessibilityLabel(project.isAvailable ? project.name : "\(project.name), folder unavailable")
         .accessibilityValue(project.path)
@@ -2637,8 +2637,8 @@ private struct LiveConversationRow: View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(session.displayTitle)
-                    .font(ElevateTheme.serif(15))
-                    .foregroundStyle(ElevateTheme.ink)
+                    .font(HostTheme.serif(15))
+                    .foregroundStyle(HostTheme.ink)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 6) {
@@ -2647,28 +2647,28 @@ private struct LiveConversationRow: View {
                     }
                     if attentionMessage != nil { AttentionPixel() }
                     Text("\(session.agent.title.uppercased()) · \(status)")
-                        .font(ElevateTheme.utility(10, medium: attentionMessage != nil))
+                        .font(HostTheme.utility(10, medium: attentionMessage != nil))
                         .tracking(0.2)
-                        .foregroundStyle(attentionMessage != nil ? ElevateTheme.ink : ElevateTheme.graphite)
+                        .foregroundStyle(attentionMessage != nil ? HostTheme.ink : HostTheme.graphite)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .help(session.pendingResumeID == nil ? attentionMessage ?? ""
                       : session.isPaused ? "Paused to free a slot for another session. Select to resume."
                       : "Saved from the previous launch. Select to start the CLI and resume.")
             }
-            .padding(.horizontal, ElevateTheme.spacing8)
+            .padding(.horizontal, HostTheme.spacing8)
             .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? ElevateTheme.paperDeep : ElevateTheme.paper)
+            .background(isSelected ? HostTheme.paperDeep : HostTheme.paper)
             .overlay(alignment: .leading) {
-                if isSelected { Rectangle().fill(ElevateTheme.ink).frame(width: 2) }
+                if isSelected { Rectangle().fill(HostTheme.ink).frame(width: 2) }
             }
             .overlay(alignment: .bottom) {
-                Rectangle().fill(ElevateTheme.borderSubtle).frame(height: ElevateTheme.hairlineWidth)
+                Rectangle().fill(HostTheme.borderSubtle).frame(height: HostTheme.hairlineWidth)
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(ElevateHoverButtonStyle())
+        .buttonStyle(HoverButtonStyle())
         .help("\(session.agent.title) · \(session.displayTitle) · \(status.capitalized). Select to open this session.")
         .accessibilityLabel("\(session.agent.title), \(session.displayTitle), \(status.capitalized)")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
@@ -2806,7 +2806,7 @@ struct HostView: View {
                 if model.showsSideBySide {
                     HStack(spacing: 0) {
                         sessionPane(model.currentWorkspace.session(for: .claude), split: true)
-                        Rectangle().fill(ElevateTheme.border).frame(width: ElevateTheme.hairlineWidth)
+                        Rectangle().fill(HostTheme.border).frame(width: HostTheme.hairlineWidth)
                         sessionPane(model.currentWorkspace.session(for: .codex), split: true)
                     }
                 } else {
@@ -2835,7 +2835,7 @@ struct HostView: View {
             .hidden()
         }
         .frame(minWidth: 960, minHeight: 600)
-        .background(ElevateTheme.paper)
+        .background(HostTheme.paper)
         .sheet(item: $projectToolsRequest) { request in
             let directory = request.directory
             ProjectToolsView(directory: directory, store: model.projectContextStore, onOpenWorkspace: model.openWorkspace) { owner, prompt in
@@ -3036,7 +3036,7 @@ struct HostView: View {
             Text(session.compatibility.message).font(.callout)
             Spacer()
             Button("Use terminal") { focusTerminal(for: session.agent) }
-        }.padding(10).background(ElevateTheme.signal.opacity(0.25))
+        }.padding(10).background(HostTheme.signal.opacity(0.25))
     }
 
     private func requestPromptFocus(_ agent: Agent? = nil) {

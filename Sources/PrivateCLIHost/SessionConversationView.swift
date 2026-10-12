@@ -30,10 +30,10 @@ struct SessionConversationView: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Text(isShowingTerminal ? "TERMINAL" : "CHAT")
-                    .font(ElevateTheme.utility(11, medium: true)).foregroundStyle(ElevateTheme.graphite)
+                    .font(HostTheme.utility(11, medium: true)).foregroundStyle(HostTheme.graphite)
                 if session.terminalResponseRequest != nil {
                     Text(session.hasQueuedQuestions ? "A question is waiting" : "Answer the request below")
-                        .font(.caption).foregroundStyle(ElevateTheme.graphite)
+                        .font(.caption).foregroundStyle(HostTheme.graphite)
                 }
                 Spacer()
                 if session.hasQueuedQuestions {
@@ -68,7 +68,7 @@ struct SessionConversationView: View {
                     .accessibilityHidden(isShowingTerminal)
             }
         }
-        .background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
+        .background(HostTheme.paper).foregroundStyle(HostTheme.ink)
         .onChange(of: isShowingTerminal) { shown in
             if !shown, isActive { onPromptFocus() }
         }
@@ -103,13 +103,13 @@ struct SessionConversationView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if transcript.messages.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
-                            PixelMark(sprite: session.agent.mark, color: ElevateTheme.graphite)
+                            PixelMark(sprite: session.agent.mark, color: HostTheme.graphite)
                             Text(conversationID == nil ? "New conversation" : "Loading conversation…")
-                                .font(ElevateTheme.serif(24))
+                                .font(HostTheme.serif(24))
                             if session.slotWait == nil {
                                 Text(conversationID == nil ? "Write below, or choose a conversation from History."
                                     : "Your messages and replies will appear here.")
-                                    .font(.callout).foregroundStyle(ElevateTheme.graphite)
+                                    .font(.callout).foregroundStyle(HostTheme.graphite)
                             }
                             if conversationID != nil, !transcript.foundFile {
                                 Button("View terminal output", action: onTerminal).buttonStyle(.borderless)
@@ -122,7 +122,7 @@ struct SessionConversationView: View {
                             .padding(.top, index == 0 ? 0 : (continues ? 12 : 28) as CGFloat).id(message.id)
                     }
                     if let error = transcript.error {
-                        Text(error).font(.callout).foregroundStyle(ElevateTheme.graphite).padding(.top, 28)
+                        Text(error).font(.callout).foregroundStyle(HostTheme.graphite).padding(.top, 28)
                     }
                     if session.isWorking {
                         // The latest step says more than "working": Claude logs a
@@ -131,7 +131,7 @@ struct SessionConversationView: View {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
                             Text(latest?.title ?? "\(session.agent.title) is working…").lineLimit(1).truncationMode(.tail)
-                                .font(.caption).foregroundStyle(ElevateTheme.graphite)
+                                .font(.caption).foregroundStyle(HostTheme.graphite)
                         }.padding(.top, latest == nil ? 28 : 12)
                     }
                     if session.state == .queued, let wait = session.slotWait {
@@ -143,17 +143,17 @@ struct SessionConversationView: View {
                             if let limit = wait.raisedLimit {
                                 Button("Allow \(limit) sessions") { onAllowMoreSessions(limit) }
                                     .buttonStyle(.borderless)
-                                    .foregroundStyle(ElevateTheme.ink)
+                                    .foregroundStyle(HostTheme.ink)
                                     .accessibilityIdentifier("conversationAllowMoreSessions")
                             }
                         }
-                        .font(.caption).foregroundStyle(ElevateTheme.graphite)
+                        .font(.caption).foregroundStyle(HostTheme.graphite)
                         .padding(.top, transcript.messages.isEmpty ? 0 : 28)
                     }
                     Color.clear.frame(height: 1).id("latest")
                         .onAppear { followsLatest = true }
                         .onDisappear { followsLatest = false }
-                }.padding(24).frame(maxWidth: ElevateTheme.readingWidth, alignment: .leading).frame(maxWidth: .infinity)
+                }.padding(24).frame(maxWidth: HostTheme.readingWidth, alignment: .leading).frame(maxWidth: .infinity)
             }
             .onChange(of: transcript.messages.last) { _ in
                 if followsLatest { proxy.scrollTo("latest", anchor: .bottom) }
@@ -165,6 +165,6 @@ struct SessionConversationView: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) { releaseLabel }
-        }.background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
+        }.background(HostTheme.paper).foregroundStyle(HostTheme.ink)
     }
 }

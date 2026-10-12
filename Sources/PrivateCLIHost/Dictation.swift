@@ -614,12 +614,12 @@ struct DictationControl: View {
     var body: some View {
         Button(action: onToggle) {
             Image(systemName: isActive ? "mic.fill" : "mic")
-                .foregroundStyle(isActive ? ElevateTheme.onSignal : ElevateTheme.graphite)
+                .foregroundStyle(isActive ? HostTheme.onSignal : HostTheme.graphite)
                 .frame(width: 28, height: 28)
-                .background(isActive ? ElevateTheme.signal : Color.clear,
-                            in: RoundedRectangle(cornerRadius: ElevateTheme.controlRadius))
+                .background(isActive ? HostTheme.signal : Color.clear,
+                            in: RoundedRectangle(cornerRadius: HostTheme.controlRadius))
         }
-        .buttonStyle(ElevateHoverButtonStyle())
+        .buttonStyle(HoverButtonStyle())
         .disabled(!isEnabled && !isActive)
         .help(help)
         .accessibilityLabel(isActive ? "Finish dictation" : "Dictate")
@@ -657,7 +657,7 @@ struct DictationStatus: View {
                 HStack(spacing: 2) {
                     ForEach(Array([0.55, 1, 0.75, 0.4].enumerated()), id: \.offset) { _, scale in
                         Capsule()
-                            .fill(ElevateTheme.ink)
+                            .fill(HostTheme.ink)
                             .frame(width: 2, height: 3 + CGFloat(meter.level) * 13 * scale)
                     }
                 }
@@ -669,7 +669,7 @@ struct DictationStatus: View {
             }
             Text(title)
                 .font(.system(size: 10))
-                .foregroundStyle(ElevateTheme.graphite)
+                .foregroundStyle(HostTheme.graphite)
                 .lineLimit(1)
         }
         .accessibilityElement(children: .combine)

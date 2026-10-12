@@ -6,7 +6,7 @@ Open source under the MIT license. SwiftTerm retains its own MIT license;
 both notices are included in packaged apps. Claude and Codex are installed
 separately and remain subject to their providers' terms.
 
-The interface follows the NoA 2.0 Elevate design system: paper or ink surfaces that follow the macOS appearance, a chat transcript, a dark terminal for native controls, ruled lists, and a lime action for starting work. Titles and names are set in Newsreader and labels in Chivo Mono. Both are bundled in `Resources/Fonts` under the SIL Open Font License, and their license texts ship in the app's `Licenses` folder.
+The interface uses paper or ink surfaces that follow the macOS appearance, a chat transcript, a dark terminal for native controls, ruled lists, and a lime action for starting work. Titles and names are set in Newsreader and labels in Chivo Mono. Both are bundled in `Resources/Fonts` under the SIL Open Font License, and their license texts ship in the app's `Licenses` folder.
 
 ## Build and open
 

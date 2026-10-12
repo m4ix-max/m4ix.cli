@@ -121,7 +121,7 @@ struct ProjectToolsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text(directory.lastPathComponent).font(ElevateTheme.serif(26)).lineLimit(1).truncationMode(.middle).help(directory.path)
+                Text(directory.lastPathComponent).font(HostTheme.serif(26)).lineLimit(1).truncationMode(.middle).help(directory.path)
                 Spacer()
                 if busy { ProgressView().controlSize(.small) }
                 Button(dirty ? "Save and close" : "Close") {
@@ -148,7 +148,7 @@ struct ProjectToolsView: View {
             }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(24).frame(width: 740, height: 620)
-        .background(ElevateTheme.paper)
+        .background(HostTheme.paper)
         .interactiveDismissDisabled(dirty || busy)
         .task { await load() }
     }
@@ -159,7 +159,7 @@ struct ProjectToolsView: View {
             Text("Keep the goal, constraints, and decisions both agents need. The brief accompanies tasks started here and agent handoffs.")
                 .foregroundStyle(.secondary)
             TextEditor(text: $context.brief).font(.system(.body, design: .monospaced))
-                .border(ElevateTheme.border).disabled(!loaded || busy)
+                .border(HostTheme.border).disabled(!loaded || busy)
 
             Button("Save brief") { Task { _ = await save() } }.disabled(!loaded || busy || !dirty)
         }

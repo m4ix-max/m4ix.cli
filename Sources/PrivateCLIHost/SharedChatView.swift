@@ -14,9 +14,9 @@ struct SharedChatView: View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Shared chat").font(ElevateTheme.serif(28))
+                    Text("Shared chat").font(HostTheme.serif(28))
                     Text("Claude, Codex and you · \(chat.project.lastPathComponent)")
-                        .font(.callout).foregroundStyle(ElevateTheme.graphite)
+                        .font(.callout).foregroundStyle(HostTheme.graphite)
                         .lineLimit(1).truncationMode(.middle)
                 }
                 Spacer()
@@ -38,11 +38,11 @@ struct SharedChatView: View {
                         if chat.thread.messages.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Give them something to think through together.")
-                                    .font(ElevateTheme.serif(23))
+                                    .font(HostTheme.serif(23))
                                 Text("Both agents read this discussion and take turns replying. Ask for competing approaches, a critique, or a plan for this project.")
                                 Text("Use @claude or @codex to ask just one. Stop the exchange whenever you want to add your thoughts.")
                                 Text("When the plan is ready, choose a provider under Send task to, review the task, then start an implementation conversation.")
-                                    .font(.callout).foregroundStyle(ElevateTheme.graphite)
+                                    .font(.callout).foregroundStyle(HostTheme.graphite)
                             }.padding(.vertical, 24)
                         }
                         ForEach(Array(chat.thread.messages.enumerated()), id: \.element.id) { index, message in
@@ -56,7 +56,7 @@ struct SharedChatView: View {
                                 .padding(.top, chat.thread.messages.isEmpty ? 0 : 24)
                         } else if !chat.partialReply.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Unfinished reply · not shared").font(.caption).foregroundStyle(ElevateTheme.graphite)
+                                Text("Unfinished reply · not shared").font(.caption).foregroundStyle(HostTheme.graphite)
                                 ChatMessageBody(text: chat.partialReply)
                             }.padding(.top, 24)
                         }
@@ -80,7 +80,7 @@ struct SharedChatView: View {
                     Text(failure).font(.callout).foregroundStyle(.red).textSelection(.enabled)
                         .lineLimit(5)
                 } else if !chat.notice.isEmpty {
-                    Text(chat.notice).font(.callout).foregroundStyle(ElevateTheme.graphite)
+                    Text(chat.notice).font(.callout).foregroundStyle(HostTheme.graphite)
                 }
                 HStack {
                     Toggle("Let them discuss", isOn: $chat.automatic).toggleStyle(.checkbox)
@@ -102,8 +102,8 @@ struct SharedChatView: View {
                 }
                 TextEditor(text: $chat.draft)
                     .font(.system(size: 14)).frame(height: 76)
-                    .padding(6).background(ElevateTheme.paperDeep)
-                    .overlay(Rectangle().stroke(ElevateTheme.border, lineWidth: 1))
+                    .padding(6).background(HostTheme.paperDeep)
+                    .overlay(Rectangle().stroke(HostTheme.border, lineWidth: 1))
                     .accessibilityLabel("Message to the shared chat")
                     .disabled(!chat.loaded)
                 HStack {
@@ -112,7 +112,7 @@ struct SharedChatView: View {
                         Text("Claude").tag("claude")
                         Text("Codex").tag("codex")
                     }.frame(width: 150).disabled(chat.isRunning)
-                    Text("⌘Return to send").font(.caption).foregroundStyle(ElevateTheme.graphite)
+                    Text("⌘Return to send").font(.caption).foregroundStyle(HostTheme.graphite)
                     Spacer()
                     Menu("Send task to…") {
                         ForEach(Agent.allCases) { agent in
@@ -123,13 +123,13 @@ struct SharedChatView: View {
                     .help("Review a task and discussion context before starting Claude or Codex")
                     Button("Send") { _ = chat.send() }
                         .keyboardShortcut(.return, modifiers: .command)
-                        .buttonStyle(.borderedProminent).tint(ElevateTheme.signal)
-                        .foregroundStyle(chat.canSend ? Color.black : ElevateTheme.graphite).disabled(!chat.canSend)
+                        .buttonStyle(.borderedProminent).tint(HostTheme.signal)
+                        .foregroundStyle(chat.canSend ? Color.black : HostTheme.graphite).disabled(!chat.canSend)
                 }
             }.padding(24)
         }
         .frame(minWidth: 720, idealWidth: 840, minHeight: 620, idealHeight: 760)
-        .background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
+        .background(HostTheme.paper).foregroundStyle(HostTheme.ink)
         .task { await chat.load() }
         .onDisappear { chat.close() }
         .sheet(item: $handoffDraft, onDismiss: {

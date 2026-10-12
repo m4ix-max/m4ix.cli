@@ -112,12 +112,12 @@ struct PromptComposer: View {
                     Text("A question or approval is waiting in the terminal.")
                     Spacer(minLength: 8)
                     Button("Answer in terminal", action: onTerminal)
-                        .buttonStyle(ElevateHoverButtonStyle())
-                        .foregroundStyle(ElevateTheme.ink)
+                        .buttonStyle(HoverButtonStyle())
+                        .foregroundStyle(HostTheme.ink)
                         .accessibilityIdentifier("promptAnswerTerminal")
                 }
                 .font(.system(size: 12))
-                .foregroundStyle(ElevateTheme.graphite)
+                .foregroundStyle(HostTheme.graphite)
             } else if mode == .waiting {
                 HStack(spacing: 8) {
                     Image(systemName: "hourglass")
@@ -125,7 +125,7 @@ struct PromptComposer: View {
                     Spacer(minLength: 8)
                 }
                 .font(.system(size: 12))
-                .foregroundStyle(ElevateTheme.graphite)
+                .foregroundStyle(HostTheme.graphite)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -142,7 +142,7 @@ struct PromptComposer: View {
                     if taskText.isEmpty {
                         Text(placeholder)
                             .font(.system(size: 14))
-                            .foregroundStyle(ElevateTheme.graphite)
+                            .foregroundStyle(HostTheme.graphite)
                             .padding(.leading, 5)
                             .padding(.top, 4)
                             .allowsHitTesting(false)
@@ -169,7 +169,7 @@ struct PromptComposer: View {
                         Image(systemName: "photo.badge.plus")
                             .frame(width: 28, height: 28)
                     }
-                    .buttonStyle(ElevateHoverButtonStyle())
+                    .buttonStyle(HoverButtonStyle())
                     .disabled(!isEnabled || isBusy)
                     .help("Add images")
                     .accessibilityLabel("Add images")
@@ -179,7 +179,7 @@ struct PromptComposer: View {
                         Image(systemName: "keyboard")
                             .frame(width: 28, height: 28)
                     }
-                    .buttonStyle(ElevateHoverButtonStyle())
+                    .buttonStyle(HoverButtonStyle())
                     .help("Terminal controls (⌘⇧T)")
                     .accessibilityLabel("Use terminal controls")
                     .accessibilityIdentifier("promptTerminalControls")
@@ -196,7 +196,7 @@ struct PromptComposer: View {
                         ViewThatFits(in: .horizontal) {
                             Text("↵ Send   ⇧↵ New line")
                                 .font(.system(size: 10))
-                                .foregroundStyle(ElevateTheme.graphite)
+                                .foregroundStyle(HostTheme.graphite)
                                 .fixedSize()
                             Color.clear.frame(width: 0, height: 0)
                         }
@@ -207,24 +207,24 @@ struct PromptComposer: View {
                             Text(buttonTitle).font(.system(size: 12, weight: .medium)).fixedSize()
                             Image(systemName: "arrow.up").font(.system(size: 11, weight: .semibold))
                         }
-                        .foregroundStyle(canSubmit ? ElevateTheme.onSignal : ElevateTheme.graphite)
+                        .foregroundStyle(canSubmit ? HostTheme.onSignal : HostTheme.graphite)
                         .padding(.horizontal, 12)
                         .frame(height: 30)
-                        .background(canSubmit ? ElevateTheme.signal : ElevateTheme.paperDeep,
+                        .background(canSubmit ? HostTheme.signal : HostTheme.paperDeep,
                                     in: RoundedRectangle(cornerRadius: 6))
                     }
-                    .buttonStyle(ElevateHoverButtonStyle())
+                    .buttonStyle(HoverButtonStyle())
                     .disabled(!canSubmit)
                     .keyboardShortcut(takesKeyboardShortcut ? KeyboardShortcut(.return, modifiers: .command) : nil)
                     .accessibilityLabel(mode == .start ? "Start a conversation" : "Send prompt")
                     .accessibilityIdentifier("promptSubmit")
                 }
-                .foregroundStyle(ElevateTheme.graphite)
+                .foregroundStyle(HostTheme.graphite)
             }
             .padding(12)
-            .background(ElevateTheme.paperDeep.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+            .background(HostTheme.paperDeep.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
             .overlay {
-                RoundedRectangle(cornerRadius: 10).strokeBorder(ElevateTheme.borderSubtle, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10).strokeBorder(HostTheme.borderSubtle, lineWidth: 1)
             }
         }
         .frame(maxWidth: 1040)
@@ -232,7 +232,7 @@ struct PromptComposer: View {
         .padding(.top, 12)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity)
-        .background(ElevateTheme.paper)
+        .background(HostTheme.paper)
     }
 
     private var accessibilityHint: String {
@@ -274,20 +274,20 @@ private struct PromptImageChip: View {
             .resizable()
             .scaledToFill()
             .frame(width: 48, height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: ElevateTheme.controlRadius))
+            .clipShape(RoundedRectangle(cornerRadius: HostTheme.controlRadius))
             .overlay {
-                RoundedRectangle(cornerRadius: ElevateTheme.controlRadius)
-                    .strokeBorder(ElevateTheme.border, lineWidth: ElevateTheme.hairlineWidth)
+                RoundedRectangle(cornerRadius: HostTheme.controlRadius)
+                    .strokeBorder(HostTheme.border, lineWidth: HostTheme.hairlineWidth)
             }
             .overlay(alignment: .topTrailing) {
                 Button(action: onRemove) {
                     Image(systemName: "xmark")
                         .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(ElevateTheme.paper)
+                        .foregroundStyle(HostTheme.paper)
                         .frame(width: 16, height: 16)
-                        .background(ElevateTheme.ink, in: Circle())
+                        .background(HostTheme.ink, in: Circle())
                 }
-                .buttonStyle(ElevateHoverButtonStyle())
+                .buttonStyle(HoverButtonStyle())
                 .padding(3)
                 .accessibilityLabel("Remove image")
             }
@@ -397,8 +397,8 @@ private struct SubmittingTextView: NSViewRepresentable {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.font = NSFont.systemFont(ofSize: 14)
-        textView.textColor = ElevateTheme.inkNS
-        textView.insertionPointColor = ElevateTheme.inkNS
+        textView.textColor = HostTheme.inkNS
+        textView.insertionPointColor = HostTheme.inkNS
         textView.textContainerInset = NSSize(width: 0, height: 4)
         textView.string = text
         if focusRequest > 0 { textView.focusWhenAttached() }

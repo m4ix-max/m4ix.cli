@@ -14,7 +14,7 @@ struct ProductionToolsView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Workspace tools").font(ElevateTheme.serif(26))
+                    Text("Workspace tools").font(HostTheme.serif(26))
                     Text("\(model.workingDirectory.lastPathComponent) · \(center.name(for: model.selectedProfileID))")
                         .font(.callout).foregroundStyle(.secondary)
                 }
@@ -28,9 +28,9 @@ struct ProductionToolsView: View {
                         Button { tab = name } label: {
                             HStack { Text(name); Spacer(); if name == "Recovery", !center.drafts.isEmpty { Text(String(center.drafts.count)) } }
                                 .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(tab == name ? ElevateTheme.signal.opacity(0.45) : .clear)
+                                .background(tab == name ? HostTheme.signal.opacity(0.45) : .clear)
                         }
-                        .buttonStyle(ElevateHoverButtonStyle())
+                        .buttonStyle(HoverButtonStyle())
                         .help(tabHelp(name))
                     }
                     Spacer()
@@ -50,7 +50,7 @@ struct ProductionToolsView: View {
                     }
                 }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-        }.frame(width: 1060, height: 720).background(ElevateTheme.paper)
+        }.frame(width: 1060, height: 720).background(HostTheme.paper)
     }
 
     private func tabHelp(_ name: String) -> String {
@@ -283,7 +283,7 @@ struct WorkflowToolsView: View {
                                 }
                                 TextField(step.kind == "Agent" ? "Task and acceptance criteria" : "Decision to review", text: $step.content, axis: .vertical)
                             }
-                        }.padding(10).background(ElevateTheme.border.opacity(0.15))
+                        }.padding(10).background(HostTheme.border.opacity(0.15))
                     }
                     HStack {
                         Button("Add step") { configuration.workflows[selectedTemplate].steps.append(WorkflowStep(kind: "Decision", title: "Review", content: "Review the result.")) }

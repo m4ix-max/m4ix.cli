@@ -42,21 +42,21 @@ final class TerminalScrollbar: NSControl {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        ElevateTheme.terminalBackground.setFill()
+        HostTheme.terminalBackground.setFill()
         bounds.fill()
         NSColor(white: 0.18, alpha: 1).setFill()
         NSBezierPath(roundedRect: NSRect(x: 4, y: 0, width: max(0, bounds.width - 8), height: bounds.height),
                      xRadius: 4, yRadius: 4).fill()
         // Use the same high contrast signal as the app's primary action so
         // the current reading position is unmistakable on the ink surface.
-        (isEnabled ? (dragOffset == nil ? ElevateTheme.nsSignal : .white)
+        (isEnabled ? (dragOffset == nil ? HostTheme.nsSignal : .white)
                    : NSColor(white: 0.45, alpha: 1)).setFill()
         NSBezierPath(roundedRect: knobRect, xRadius: 4, yRadius: 4).fill()
         if isEnabled {
             // A narrow crossbar marks the viewport's exact position even when
             // the proportional thumb is almost as tall as the track.
             let markerY = min(bounds.height - 2, max(2, CGFloat(position) * bounds.height))
-            ElevateTheme.nsInk.setFill()
+            HostTheme.nsInk.setFill()
             NSBezierPath(roundedRect: NSRect(x: 2, y: markerY - 1, width: max(0, bounds.width - 4), height: 2),
                          xRadius: 1, yRadius: 1).fill()
         }

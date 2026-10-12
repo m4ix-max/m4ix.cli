@@ -61,8 +61,8 @@ struct PixelSprite {
 struct AttentionPixel: View {
     var body: some View {
         Rectangle()
-            .fill(ElevateTheme.signal)
-            .overlay(Rectangle().strokeBorder(ElevateTheme.onSignal, lineWidth: 1))
+            .fill(HostTheme.signal)
+            .overlay(Rectangle().strokeBorder(HostTheme.onSignal, lineWidth: 1))
             .frame(width: 8, height: 8)
             .accessibilityHidden(true)
     }
@@ -72,7 +72,7 @@ struct AttentionPixel: View {
 struct PixelMark: View {
     let sprite: PixelSprite
     var pixel: CGFloat = 1.5
-    var color: Color = ElevateTheme.ink
+    var color: Color = HostTheme.ink
 
     var body: some View {
         Canvas { context, _ in

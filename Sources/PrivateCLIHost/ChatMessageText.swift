@@ -59,7 +59,7 @@ enum ChatMessageFormatting {
                 var font = isCode ? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) : NSFont.systemFont(ofSize: 14)
                 if intent.contains(.stronglyEmphasized) { font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
                 if intent.contains(.emphasized) { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
-                let color = intent.contains(.stronglyEmphasized) ? ElevateTheme.nsInk : ElevateTheme.nsReading
+                let color = intent.contains(.stronglyEmphasized) ? HostTheme.nsInk : HostTheme.nsReading
                 var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
                 if isCode { attributes[codeKey] = true }
                 if let link = run.link, let url = destination(link) { attributes[.link] = url }
@@ -68,7 +68,7 @@ enum ChatMessageFormatting {
         } else {
             result.append(NSAttributedString(string: text, attributes: [
                 .font: code ? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) : NSFont.systemFont(ofSize: 14),
-                .foregroundColor: ElevateTheme.nsReading
+                .foregroundColor: HostTheme.nsReading
             ]))
         }
         if !code {
@@ -138,7 +138,7 @@ enum ChatMessageFormatting {
                 } else { glyph = ["•", "◦", "▪"][min(levels.count - 1, 2)] }
                 marker = NSAttributedString(string: glyph + "\t", attributes: [
                     .font: NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .regular),
-                    .foregroundColor: ElevateTheme.nsGraphite
+                    .foregroundColor: HostTheme.nsGraphite
                 ])
                 paragraph.firstLineHeadIndent = start
                 paragraph.headIndent = column
@@ -172,10 +172,10 @@ enum ChatMessageFormatting {
                     let font = NSFontManager.shared.convert((value as? NSFont) ?? .systemFont(ofSize: 14), toSize: size)
                     content.addAttribute(.font, value: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask), range: run)
                 }
-                content.addAttribute(.foregroundColor, value: ElevateTheme.nsInk, range: NSRange(location: 0, length: content.length))
+                content.addAttribute(.foregroundColor, value: HostTheme.nsInk, range: NSRange(location: 0, length: content.length))
             }
             if isQuote {
-                content.addAttribute(.foregroundColor, value: ElevateTheme.nsGraphite, range: NSRange(location: 0, length: content.length))
+                content.addAttribute(.foregroundColor, value: HostTheme.nsGraphite, range: NSRange(location: 0, length: content.length))
             }
             let start = output.length
             if let marker { output.append(marker) }
@@ -247,7 +247,7 @@ final class ChatLinkTextView: NSTextView, NSTextViewDelegate {
     /// A quote carries a rule at its left edge, down every line it wraps to.
     override func draw(_ dirtyRect: NSRect) {
         if let layoutManager, let storage = textStorage, storage.length > 0 {
-            ElevateTheme.nsBorder.setFill()
+            HostTheme.nsBorder.setFill()
             storage.enumerateAttribute(ChatMessageFormatting.quoteKey, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
                 guard value != nil else { return }
                 var lines = NSRect.null
@@ -337,7 +337,7 @@ struct ChatTurn: View {
         if speaker == "you" {
             ChatMessageText(text: text, markdown: false, hugsContent: true)
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(ElevateTheme.paperDeep, in: RoundedRectangle(cornerRadius: 10))
+                .background(HostTheme.paperDeep, in: RoundedRectangle(cornerRadius: 10))
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.leading, 64)
                 .accessibilityElement(children: .contain)
@@ -348,9 +348,9 @@ struct ChatTurn: View {
                     HStack(spacing: 8) {
                         let agent = Agent(rawValue: speaker)
                         if let agent { PixelMark(sprite: agent.mark, color: agent.tint) }
-                        Text(speaker.uppercased()).font(ElevateTheme.utility(12, medium: true))
-                            .foregroundStyle(agent?.tint ?? ElevateTheme.ink)
-                        if let status { Text(status).font(.caption).foregroundStyle(ElevateTheme.graphite) }
+                        Text(speaker.uppercased()).font(HostTheme.utility(12, medium: true))
+                            .foregroundStyle(agent?.tint ?? HostTheme.ink)
+                        if let status { Text(status).font(.caption).foregroundStyle(HostTheme.graphite) }
                     }
                 }
                 if !steps.isEmpty { ChatActivity(steps: steps) }
@@ -391,7 +391,7 @@ struct ChatActivity: View {
                 .textSelection(.enabled)
             }
         }
-        .font(.caption).foregroundStyle(ElevateTheme.graphite)
+        .font(.caption).foregroundStyle(HostTheme.graphite)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -490,7 +490,7 @@ struct ChatMessageBody: View {
                 case .text(let content): ChatMessageText(text: content, markdown: markdown)
                 case .code(let content): codeBlock(content)
                 case .table(let table): ChatTableView(table: table)
-                case .rule: Rectangle().fill(ElevateTheme.border).frame(height: 1)
+                case .rule: Rectangle().fill(HostTheme.border).frame(height: 1)
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
@@ -499,7 +499,7 @@ struct ChatMessageBody: View {
     private func codeBlock(_ content: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("CODE").font(ElevateTheme.utility(10)).foregroundStyle(ElevateTheme.graphite)
+                Text("CODE").font(HostTheme.utility(10)).foregroundStyle(HostTheme.graphite)
                 Spacer()
                 Button("Copy") {
                     NSPasteboard.general.clearContents()
@@ -507,7 +507,7 @@ struct ChatMessageBody: View {
                 }.buttonStyle(.borderless).font(.caption)
             }
             ChatMessageText(text: content, code: true)
-        }.padding(12).background(ElevateTheme.paperDeep)
+        }.padding(12).background(HostTheme.paperDeep)
     }
 }
 
@@ -539,7 +539,7 @@ struct ChatTableView: View {
             ?? AttributedString(text)
         return Text(content)
             .font(.system(size: 13, weight: header ? .semibold : .regular))
-            .foregroundStyle(header ? ElevateTheme.ink : ElevateTheme.reading)
+            .foregroundStyle(header ? HostTheme.ink : HostTheme.reading)
             .multilineTextAlignment(alignment == .trailing ? .trailing : (alignment == .center ? .center : .leading))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -548,7 +548,7 @@ struct ChatTableView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity,
                    alignment: alignment == .trailing ? .topTrailing : (alignment == .center ? .top : .topLeading))
             .overlay(alignment: .bottom) {
-                Rectangle().fill(header ? ElevateTheme.border : ElevateTheme.borderSubtle).frame(height: 1)
+                Rectangle().fill(header ? HostTheme.border : HostTheme.borderSubtle).frame(height: 1)
             }
     }
 }

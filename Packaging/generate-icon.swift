@@ -21,7 +21,7 @@ guard let context = CGContext(
     exit(1)
 }
 
-// NoA 2.0 Elevate: a single ink field, a paper prompt, and one signal cursor.
+// A single ink field, a paper prompt, and one signal cursor.
 // The outer radius follows the macOS app-icon silhouette; the artwork is flat.
 func color(_ hex: UInt32) -> CGColor {
     let red = CGFloat((hex >> 16) & 0xff) / 255

@@ -2,19 +2,18 @@ import AppKit
 import CoreText
 import SwiftUI
 
-/// NoA Elevate colour tokens adapted to this macOS utility.
+/// Colour, type and spacing tokens for this macOS utility.
 ///
-/// Source: NoA.designsystem/NoA design system/tokens.json (18 September 2026).
 /// Type is Newsreader and Chivo Mono, bundled in Resources/Fonts under the
 /// SIL Open Font License; Georgia and the system monospace stand in if the
 /// files cannot be loaded.
-enum ElevateTheme {
+enum HostTheme {
     // MARK: Colour
 
     private static let solidInk = nsColor(0x141414)
     private static let solidPaper = nsColor(0xEBEAEA)
 
-    // These are surface and text roles. In dark appearance the inverse Elevate
+    // These are surface and text roles. In dark appearance the inverse
     // tokens become the default chrome, while the terminal stays ink on paper.
     static let nsInk = adaptive(light: solidInk, dark: solidPaper)
     static let nsPaper = adaptive(light: solidPaper, dark: solidInk)
@@ -151,21 +150,21 @@ enum ElevateTheme {
 
 /// A restrained hover and press response for the app's custom chrome buttons.
 /// Native controls keep their platform appearance; plain buttons use this style
-/// so pointer affordance remains visible without changing the Elevate palette.
-struct ElevateHoverButtonStyle: ButtonStyle {
+/// so pointer affordance remains visible without changing the palette.
+struct HoverButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @State private var isHovered = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .overlay {
-                RoundedRectangle(cornerRadius: ElevateTheme.controlRadius)
-                    .fill(ElevateTheme.ink.opacity(configuration.isPressed ? 0.10 : (isHovered ? 0.055 : 0)))
+                RoundedRectangle(cornerRadius: HostTheme.controlRadius)
+                    .fill(HostTheme.ink.opacity(configuration.isPressed ? 0.10 : (isHovered ? 0.055 : 0)))
                     .allowsHitTesting(false)
             }
             .scaleEffect(configuration.isPressed && isEnabled ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.48)
-            .contentShape(RoundedRectangle(cornerRadius: ElevateTheme.controlRadius))
+            .contentShape(RoundedRectangle(cornerRadius: HostTheme.controlRadius))
             .onHover { isHovered = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovered)
             .animation(.easeOut(duration: 0.08), value: configuration.isPressed)

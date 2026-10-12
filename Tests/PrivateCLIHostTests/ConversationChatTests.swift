@@ -381,12 +381,12 @@ final class ConversationChatTests: XCTestCase {
             let range = (text.string as NSString).range(of: fragment)
             return text.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
         }
-        XCTAssertEqual(color(of: "Plan"), ElevateTheme.nsInk)
-        XCTAssertEqual(color(of: "Plain words"), ElevateTheme.nsReading)
-        XCTAssertEqual(color(of: "a bold lead"), ElevateTheme.nsInk)
-        XCTAssertEqual(color(of: "code"), ElevateTheme.nsReading)
+        XCTAssertEqual(color(of: "Plan"), HostTheme.nsInk)
+        XCTAssertEqual(color(of: "Plain words"), HostTheme.nsReading)
+        XCTAssertEqual(color(of: "a bold lead"), HostTheme.nsInk)
+        XCTAssertEqual(color(of: "code"), HostTheme.nsReading)
         XCTAssertEqual(ChatMessageFormatting.attributedText("Your own message", markdown: false)
-            .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, ElevateTheme.nsReading)
+            .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, HostTheme.nsReading)
 
         guard let output = ProcessInfo.processInfo.environment["M4IX_UI_PREVIEW_DIR"] else { return }
         let steps = [
@@ -411,8 +411,8 @@ final class ConversationChatTests: XCTestCase {
                 The merge should do more than place two cards beside each other. A task list and a calendar should become a planner, with dated tasks appearing on the calendar. I'll build around that.
                 """).padding(.top, 28)
         }
-        .padding(24).frame(maxWidth: ElevateTheme.readingWidth, alignment: .leading).frame(width: 1000)
-        .background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
+        .padding(24).frame(maxWidth: HostTheme.readingWidth, alignment: .leading).frame(width: 1000)
+        .background(HostTheme.paper).foregroundStyle(HostTheme.ink)
         for (name, appearance) in [("dark", NSAppearance.Name.darkAqua), ("light", .aqua)] {
             let view = NSHostingView(rootView: conversation)
             view.appearance = NSAppearance(named: appearance)
@@ -478,7 +478,7 @@ final class ConversationChatTests: XCTestCase {
                     ChatActivity(steps: long, expanded: true)
                     ChatTurn(speaker: "claude", text: "The reader now keeps tool calls.", continues: true)
                     ChatActivity(steps: short)
-                }.padding(24).frame(width: CGFloat(width)).background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
+                }.padding(24).frame(width: CGFloat(width)).background(HostTheme.paper).foregroundStyle(HostTheme.ink)
                 let view = NSHostingView(rootView: turn)
                 view.frame = NSRect(origin: .zero, size: view.fittingSize)
                 let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
@@ -583,7 +583,7 @@ final class ConversationChatTests: XCTestCase {
             """
         for width in [800, 440] {
             let view = NSHostingView(rootView: ChatTurn(speaker: "claude", text: reply).padding(24)
-                .frame(width: CGFloat(width)).background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink))
+                .frame(width: CGFloat(width)).background(HostTheme.paper).foregroundStyle(HostTheme.ink))
             view.frame = NSRect(origin: .zero, size: view.fittingSize)
             view.layoutSubtreeIfNeeded()
             let table = try XCTUnwrap(ChatMessageBody.blocks(reply).compactMap { block -> ChatTable? in
