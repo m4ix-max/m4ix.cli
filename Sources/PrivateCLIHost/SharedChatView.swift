@@ -34,7 +34,7 @@ struct SharedChatView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 24) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         if chat.thread.messages.isEmpty {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Give them something to think through together.")
@@ -45,17 +45,20 @@ struct SharedChatView: View {
                                     .font(.callout).foregroundStyle(ElevateTheme.graphite)
                             }.padding(.vertical, 24)
                         }
-                        ForEach(chat.thread.messages) { message in
-                            messageRow(speaker: message.speaker, text: message.text, status: nil).id(message.id)
+                        ForEach(Array(chat.thread.messages.enumerated()), id: \.element.id) { index, message in
+                            let continues = index > 0 && chat.thread.messages[index - 1].speaker == message.speaker
+                            ChatTurn(speaker: message.speaker, text: message.text, continues: continues)
+                                .padding(.top, index == 0 ? 0 : (continues ? 12 : 24) as CGFloat).id(message.id)
                         }
                         if let speaker = chat.activeSpeaker {
-                            messageRow(speaker: speaker, text: chat.partialReply,
+                            ChatTurn(speaker: speaker, text: chat.partialReply,
                                 status: "Replying · \(chat.repliesRemaining) repl\(chat.repliesRemaining == 1 ? "y" : "ies") remaining")
+                                .padding(.top, chat.thread.messages.isEmpty ? 0 : 24)
                         } else if !chat.partialReply.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Unfinished reply · not shared").font(.caption).foregroundStyle(ElevateTheme.graphite)
                                 ChatMessageBody(text: chat.partialReply)
-                            }
+                            }.padding(.top, 24)
                         }
                         Color.clear.frame(height: 1).id("latest")
                     }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
@@ -138,17 +141,5 @@ struct SharedChatView: View {
                 handoffStarted = true
             }
         }
-    }
-
-    private func messageRow(speaker: String, text: String, status: String?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                if let agent = Agent(rawValue: speaker) { PixelMark(sprite: agent.mark, color: ElevateTheme.ink) }
-                Text(speaker == "you" ? "YOU" : speaker.uppercased()).font(ElevateTheme.utility(12, medium: true))
-                if let status { Text(status).font(.caption).foregroundStyle(ElevateTheme.graphite) }
-            }
-            if text.isEmpty { ProgressView().controlSize(.small) }
-            else { ChatMessageBody(text: text, markdown: speaker != "you") }
-        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }

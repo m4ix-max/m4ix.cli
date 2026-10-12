@@ -252,7 +252,9 @@ final class ConversationChatTests: XCTestCase {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let messages: [[String: Any]] = [
             ["type": "user", "uuid": "user", "sessionId": id, "message": ["role": "user", "content": "Can I click website links in this chat?"]],
-            ["type": "assistant", "uuid": "reply", "sessionId": id, "message": ["role": "assistant", "content": [["type": "text", "text": "Yes. Open [Example](https://example.com) or https://example.org directly.\n\n```sh\necho 'Readable code, with a Copy button'\n```\n\nYou can select and copy this reply."]]]]
+            ["type": "assistant", "uuid": "reply", "sessionId": id, "message": ["role": "assistant", "content": [["type": "text", "text": "Yes. Open [Example](https://example.com) or https://example.org directly.\n\n```sh\necho 'Readable code, with a Copy button'\n```\n\nYou can select and copy this reply."]]]],
+            ["type": "assistant", "uuid": "more", "sessionId": id, "message": ["role": "assistant", "content": [["type": "text", "text": "A second message in the same reply shares its header."]]]],
+            ["type": "user", "uuid": "next", "sessionId": id, "message": ["role": "user", "content": "Start the notch"]]
         ]
         let data = try messages.reduce(into: Data()) { output, row in
             output.append(try JSONSerialization.data(withJSONObject: row)); output.append(0x0a)
@@ -275,16 +277,24 @@ final class ConversationChatTests: XCTestCase {
                 try await Task.sleep(nanoseconds: 50_000_000)
                 view.layoutSubtreeIfNeeded()
                 textViews = descendants(view).compactMap { $0 as? ChatLinkTextView }
-            } while textViews.count < 4 && Date() < deadline
-            XCTAssertEqual(textViews.count, 4)
-            XCTAssertTrue(textViews.contains { $0.string.contains("Can I click") })
-            XCTAssertTrue(textViews.contains { $0.string.contains("You can select") })
+            } while textViews.count < 6 && Date() < deadline
+            XCTAssertEqual(textViews.count, 6)
+            let reply = try XCTUnwrap(textViews.first { $0.string.contains("You can select") })
+            let column = reply.convert(reply.bounds, to: view)
             for textView in textViews {
                 let frame = textView.convert(textView.bounds, to: view)
-                XCTAssertGreaterThan(frame.width, 200)
                 XCTAssertLessThanOrEqual(frame.maxX, CGFloat(width))
                 XCTAssertGreaterThanOrEqual(frame.minX, 0)
                 XCTAssertGreaterThan(frame.height, 15)
+                if ["Can I click", "Start the notch"].contains(where: textView.string.hasPrefix) {
+                    // Your messages hug their text inside a block at the right.
+                    XCTAssertEqual(frame.maxX, column.maxX - 14, accuracy: 1)
+                    XCTAssertLessThan(frame.width, column.width - 64 - 28)
+                    XCTAssertGreaterThan(frame.minX, column.minX + 64)
+                } else {
+                    XCTAssertGreaterThan(frame.width, 200)
+                    XCTAssertEqual(frame.minX, column.minX, accuracy: 13)
+                }
             }
             if let output = ProcessInfo.processInfo.environment["M4IX_UI_PREVIEW_DIR"] {
                 let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))

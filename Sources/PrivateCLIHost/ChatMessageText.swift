@@ -110,10 +110,12 @@ final class ChatLinkTextView: NSTextView, NSTextViewDelegate {
         isRichText = true
         drawsBackground = false
         textContainerInset = .zero
-        textContainer?.lineFragmentPadding = 0
+        // `textContainer` in this initializer is the argument, usually nil,
+        // so the container the view uses is configured by name.
+        container.lineFragmentPadding = 0
         isHorizontallyResizable = false
         isVerticallyResizable = true
-        textContainer?.widthTracksTextView = true
+        container.widthTracksTextView = true
         linkTextAttributes = [.foregroundColor: NSColor.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue]
         delegate = self
         setAccessibilityLabel("Chat message")
@@ -127,11 +129,20 @@ final class ChatLinkTextView: NSTextView, NSTextViewDelegate {
         return true
     }
 
-    func height(for width: CGFloat) -> CGFloat {
-        guard let textContainer, let layoutManager else { return 24 }
+    func height(for width: CGFloat) -> CGFloat { max(24, size(for: width).height) }
+
+    /// The width is the longest line's, so a short message can hug its text.
+    /// Once the container has been resized its used rect spans the whole
+    /// width, so the lines are measured one by one.
+    func size(for width: CGFloat) -> CGSize {
+        guard let textContainer, let layoutManager else { return CGSize(width: width, height: 24) }
         textContainer.containerSize = NSSize(width: max(1, width), height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
-        return max(24, ceil(layoutManager.usedRect(for: textContainer).height))
+        var longest: CGFloat = 0
+        layoutManager.enumerateLineFragments(forGlyphRange: layoutManager.glyphRange(for: textContainer)) { _, used, _, _, _ in
+            longest = max(longest, used.maxX)
+        }
+        return CGSize(width: ceil(longest), height: ceil(layoutManager.usedRect(for: textContainer).height))
     }
 }
 
@@ -139,6 +150,7 @@ struct ChatMessageText: NSViewRepresentable {
     let text: String
     var markdown = true
     var code = false
+    var hugsContent = false
 
     func makeNSView(context: Context) -> ChatLinkTextView {
         let view = ChatLinkTextView(frame: .zero)
@@ -153,7 +165,43 @@ struct ChatMessageText: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: ChatLinkTextView, context: Context) -> CGSize? {
         let width = proposal.width ?? 600
-        return CGSize(width: width, height: nsView.height(for: width))
+        guard hugsContent else { return CGSize(width: width, height: nsView.height(for: width)) }
+        let size = nsView.size(for: width)
+        return CGSize(width: min(width, size.width), height: size.height)
+    }
+}
+
+/// One message in a conversation. Yours sit in a block at the right, like the
+/// composer they were written in. Replies run full width under the speaker's
+/// mark, which is shown once for consecutive messages from the same speaker.
+struct ChatTurn: View {
+    let speaker: String
+    let text: String
+    var status: String?
+    var continues = false
+
+    var body: some View {
+        if speaker == "you" {
+            ChatMessageText(text: text, markdown: false, hugsContent: true)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(ElevateTheme.paperDeep, in: RoundedRectangle(cornerRadius: 10))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.leading, 64)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("You")
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                if !continues || status != nil {
+                    HStack(spacing: 8) {
+                        if let agent = Agent(rawValue: speaker) { PixelMark(sprite: agent.mark, color: ElevateTheme.ink) }
+                        Text(speaker.uppercased()).font(ElevateTheme.utility(12, medium: true))
+                        if let status { Text(status).font(.caption).foregroundStyle(ElevateTheme.graphite) }
+                    }
+                }
+                if text.isEmpty { ProgressView().controlSize(.small) }
+                else { ChatMessageBody(text: text) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 

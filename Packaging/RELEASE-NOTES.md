@@ -1,3 +1,10 @@
+# m4ix.CLI 0.18.1
+
+The chat view shows who wrote what. Your messages sit in blocks at the right,
+and each reply runs under its provider's mark, shown once for a run of
+messages from the same speaker. Shared chat uses the same layout, and message
+text now lines up with its label.
+
 # m4ix.CLI 0.18.0
 
 Adds Hermes Agent as a third provider. Choose Hermes in the toolbar to run it

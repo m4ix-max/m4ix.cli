@@ -2,6 +2,20 @@
 
 m4ix.CLI should be a reliable macOS workspace for using Claude and Codex together on real software projects. Success requires runtime evidence as well as passing unit tests.
 
+## Who wrote what in chat for 0.18.1
+
+The chat view and Shared chat separate the speakers. Your messages sit in
+blocks at the right, sized to their text; replies run full width under the
+provider's mark, shown once for consecutive messages from the same speaker.
+Message text now starts at its label: the chat text view's line padding was
+never removed, because its initializer set it on the nil argument rather
+than on the container in use.
+
+On 2026-10-12 the chat layout test checked, at both widths, that your
+messages end at the column's right edge and fit their text. Renders in dark
+and light appearance were inspected. The full suite matched 0.18.0: 133
+tests, four opt-in skips, and the same scrollbar pixel failure.
+
 ## Hermes as a third provider for 0.18.0
 
 Hermes Agent joins Claude and Codex as a hosted provider. It runs from its

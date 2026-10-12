@@ -87,7 +87,7 @@ struct SessionConversationView: View {
     private var chat: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 28) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if transcript.messages.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             PixelMark(sprite: session.agent.mark, color: ElevateTheme.graphite)
@@ -101,25 +101,19 @@ struct SessionConversationView: View {
                             }
                         }.padding(.vertical, 24)
                     }
-                    ForEach(transcript.messages) { message in
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(spacing: 8) {
-                                if let agent = Agent(rawValue: message.speaker) {
-                                    PixelMark(sprite: agent.mark, color: ElevateTheme.ink)
-                                }
-                                Text(message.speaker.uppercased()).font(ElevateTheme.utility(12, medium: true))
-                            }
-                            ChatMessageBody(text: message.text, markdown: message.speaker != "you")
-                        }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)
+                    ForEach(Array(transcript.messages.enumerated()), id: \.element.id) { index, message in
+                        let continues = index > 0 && transcript.messages[index - 1].speaker == message.speaker
+                        ChatTurn(speaker: message.speaker, text: message.text, continues: continues)
+                            .padding(.top, index == 0 ? 0 : (continues ? 12 : 28) as CGFloat).id(message.id)
                     }
                     if let error = transcript.error {
-                        Text(error).font(.callout).foregroundStyle(ElevateTheme.graphite)
+                        Text(error).font(.callout).foregroundStyle(ElevateTheme.graphite).padding(.top, 28)
                     }
                     if session.isWorking {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
                             Text("\(session.agent.title) is working…").font(.caption).foregroundStyle(ElevateTheme.graphite)
-                        }
+                        }.padding(.top, 28)
                     }
                     Color.clear.frame(height: 1).id("latest")
                         .onAppear { followsLatest = true }
