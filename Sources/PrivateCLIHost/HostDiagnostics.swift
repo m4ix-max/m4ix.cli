@@ -73,6 +73,10 @@ final class TerminalActivityClock: @unchecked Sendable {
         lock.withLock { lastOutput.map { now.timeIntervalSince($0) } }
     }
 
+    func inputAge(now: Date = Date()) -> TimeInterval? {
+        lock.withLock { lastInput.map { now.timeIntervalSince($0) } }
+    }
+
     func secondsSince(now: Date = Date()) -> (output: Int?, input: Int?) {
         lock.withLock {
             (lastOutput.map { Int(now.timeIntervalSince($0)) }, lastInput.map { Int(now.timeIntervalSince($0)) })
@@ -126,5 +130,31 @@ enum HostHealth {
 
     static func isProcessAlive(_ pid: pid_t) -> Bool {
         pid > 0 && (kill(pid, 0) == 0 || errno == EPERM)
+    }
+
+    /// Whether a shell runs anywhere below `pid`. Each agent runs its
+    /// commands in a shell, so one is found while a command it started is
+    /// still going, a server left in the background included.
+    static func runsShell(below pid: pid_t) -> Bool {
+        let shells: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh"]
+        var pending = childProcesses(of: pid)
+        var visited = Set<pid_t>()
+        while let next = pending.popLast(), visited.count < 4_096 {
+            guard visited.insert(next).inserted else { continue }
+            var name = [CChar](repeating: 0, count: 256)
+            if proc_name(next, &name, UInt32(name.count)) > 0, shells.contains(String(cString: name)) { return true }
+            pending += childProcesses(of: next)
+        }
+        return false
+    }
+
+    private static func childProcesses(of pid: pid_t) -> [pid_t] {
+        guard pid > 0 else { return [] }
+        let count = proc_listchildpids(pid, nil, 0)
+        guard count > 0 else { return [] }
+        // Room for children started between the two calls.
+        var children = [pid_t](repeating: 0, count: Int(count) + 32)
+        let filled = proc_listchildpids(pid, &children, Int32(children.count * MemoryLayout<pid_t>.size))
+        return filled > 0 ? children.prefix(Int(filled)).filter { $0 > 0 } : []
     }
 }

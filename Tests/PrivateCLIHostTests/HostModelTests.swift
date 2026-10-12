@@ -99,6 +99,25 @@ final class HostModelTests: XCTestCase {
         XCTAssertEqual(model.liveSessionsForCurrentProject().map(\.pendingResumeID), ids)
     }
 
+    func testAShellBelowAProcessIsFoundButNotTheProcessItself() throws {
+        func shell(_ script: String) throws -> Process {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", script]
+            try process.run()
+            return process
+        }
+        // `; :` keeps each shell from replacing itself with its last command.
+        let waiting = try shell("sleep 3; :")
+        let running = try shell("/bin/sh -c 'sleep 3; :'; :")
+        defer { [waiting, running].forEach { $0.terminate() } }
+        let deadline = Date().addingTimeInterval(2)
+        while !HostHealth.runsShell(below: running.processIdentifier), Date() < deadline { usleep(20_000) }
+        XCTAssertTrue(HostHealth.runsShell(below: running.processIdentifier))
+        XCTAssertFalse(HostHealth.runsShell(below: waiting.processIdentifier))
+        XCTAssertFalse(HostHealth.runsShell(below: 0))
+    }
+
     func testTestRunsKeepOutOfTheUserDataDirectory() {
         let base = HostPaths.profileBase.standardizedFileURL.path
         XCTAssertNotEqual(base, HostPaths.userDataDirectory.standardizedFileURL.path,

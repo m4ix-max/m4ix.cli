@@ -24,6 +24,10 @@ enum ElevateTheme {
     static let nsAsh = nsColor(0xAFADAC)
     static let nsSignal = nsColor(0xE8FA51)
     static let nsViolet = nsColor(0xA082F0)
+    /// Running text in chat, a step below ink: about 10:1 against paper
+    /// rather than 15:1, so long replies do not glare. Bold and headings
+    /// keep ink and stand out from it.
+    static let nsReading = adaptive(light: nsColor(0x3A3838), dark: nsColor(0xC2C0BD))
 
     static let inkNS = nsInk
     static let paperNS = nsPaper
@@ -38,6 +42,13 @@ enum ElevateTheme {
     static let signal = Color(nsColor: nsSignal)
     static let onSignal = Color(nsColor: solidInk)
     static let violet = Color(nsColor: nsViolet)
+    static let reading = Color(nsColor: nsReading)
+
+    /// Each provider's name and mark in chat. Orange and teal stay apart
+    /// for every common colour vision, and teal is not mistaken for a link.
+    /// The light values are deeper so the 12-point name still reads.
+    static let claude = Color(nsColor: adaptive(light: nsColor(0xB5532F), dark: nsColor(0xD97757)))
+    static let codex = Color(nsColor: adaptive(light: nsColor(0x0E7480), dark: nsColor(0x56C2C9)))
 
     /// The semantic hairlines in the source tokens use 8-bit alpha values.
     static let nsBorder = adaptive(
@@ -58,6 +69,8 @@ enum ElevateTheme {
 
     // MARK: Geometry
 
+    /// The conversation column: about 100 characters of chat text a line.
+    static let readingWidth: CGFloat = 760
     static let spacing8: CGFloat = 8
     static let spacing16: CGFloat = 16
     static let spacing24: CGFloat = 24

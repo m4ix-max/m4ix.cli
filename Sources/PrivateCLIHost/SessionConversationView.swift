@@ -9,6 +9,8 @@ struct SessionConversationView: View {
     let onPromptFocus: () -> Void
     let onTerminal: () -> Void
     let onPasteImages: ([PromptImage]) -> Void
+    /// Raises the concurrent session limit to the value given.
+    var onAllowMoreSessions: (Int) -> Void = { _ in }
     @State private var transcript = ConversationTranscriptSnapshot()
     @State private var followsLatest = true
 
@@ -93,9 +95,11 @@ struct SessionConversationView: View {
                             PixelMark(sprite: session.agent.mark, color: ElevateTheme.graphite)
                             Text(conversationID == nil ? "New conversation" : "Loading conversation…")
                                 .font(ElevateTheme.serif(24))
-                            Text(conversationID == nil ? "Write below, or choose a conversation from History."
-                                : "Your messages and replies will appear here.")
-                                .font(.callout).foregroundStyle(ElevateTheme.graphite)
+                            if session.slotWait == nil {
+                                Text(conversationID == nil ? "Write below, or choose a conversation from History."
+                                    : "Your messages and replies will appear here.")
+                                    .font(.callout).foregroundStyle(ElevateTheme.graphite)
+                            }
                             if conversationID != nil, !transcript.foundFile {
                                 Button("View terminal output", action: onTerminal).buttonStyle(.borderless)
                             }
@@ -119,10 +123,26 @@ struct SessionConversationView: View {
                                 .font(.caption).foregroundStyle(ElevateTheme.graphite)
                         }.padding(.top, latest == nil ? 28 : 12)
                     }
+                    if session.state == .queued, let wait = session.slotWait {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: "hourglass")
+                                Text(wait.message).fixedSize(horizontal: false, vertical: true)
+                            }
+                            if let limit = wait.raisedLimit {
+                                Button("Allow \(limit) sessions") { onAllowMoreSessions(limit) }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(ElevateTheme.ink)
+                                    .accessibilityIdentifier("conversationAllowMoreSessions")
+                            }
+                        }
+                        .font(.caption).foregroundStyle(ElevateTheme.graphite)
+                        .padding(.top, transcript.messages.isEmpty ? 0 : 28)
+                    }
                     Color.clear.frame(height: 1).id("latest")
                         .onAppear { followsLatest = true }
                         .onDisappear { followsLatest = false }
-                }.padding(24).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
+                }.padding(24).frame(maxWidth: ElevateTheme.readingWidth, alignment: .leading).frame(maxWidth: .infinity)
             }
             .onChange(of: transcript.messages.last) { _ in
                 if followsLatest { proxy.scrollTo("latest", anchor: .bottom) }

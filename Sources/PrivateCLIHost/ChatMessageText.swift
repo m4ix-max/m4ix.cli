@@ -59,7 +59,8 @@ enum ChatMessageFormatting {
                 var font = isCode ? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) : NSFont.systemFont(ofSize: 14)
                 if intent.contains(.stronglyEmphasized) { font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
                 if intent.contains(.emphasized) { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
-                var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ElevateTheme.nsInk]
+                let color = intent.contains(.stronglyEmphasized) ? ElevateTheme.nsInk : ElevateTheme.nsReading
+                var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
                 if isCode { attributes[codeKey] = true }
                 if let link = run.link, let url = destination(link) { attributes[.link] = url }
                 result.append(NSAttributedString(string: String(parsed.characters[run.range]), attributes: attributes))
@@ -67,7 +68,7 @@ enum ChatMessageFormatting {
         } else {
             result.append(NSAttributedString(string: text, attributes: [
                 .font: code ? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular) : NSFont.systemFont(ofSize: 14),
-                .foregroundColor: ElevateTheme.nsInk
+                .foregroundColor: ElevateTheme.nsReading
             ]))
         }
         if !code {
@@ -171,6 +172,7 @@ enum ChatMessageFormatting {
                     let font = NSFontManager.shared.convert((value as? NSFont) ?? .systemFont(ofSize: 14), toSize: size)
                     content.addAttribute(.font, value: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask), range: run)
                 }
+                content.addAttribute(.foregroundColor, value: ElevateTheme.nsInk, range: NSRange(location: 0, length: content.length))
             }
             if isQuote {
                 content.addAttribute(.foregroundColor, value: ElevateTheme.nsGraphite, range: NSRange(location: 0, length: content.length))
@@ -266,11 +268,26 @@ final class ChatLinkTextView: NSTextView, NSTextViewDelegate {
 
     func height(for width: CGFloat) -> CGFloat { max(24, size(for: width).height) }
 
+    /// SwiftUI asks for sizes it never places the view at, down to no width
+    /// at all. Measuring in the view's own container left the text laid out
+    /// at the last such width inside a frame of another, one character to a
+    /// line and running over the messages below, so sizes come from a
+    /// second layout of the same text.
+    private lazy var measuring: (layoutManager: NSLayoutManager, container: NSTextContainer)? = {
+        guard let textStorage else { return nil }
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 1, height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        textStorage.addLayoutManager(layoutManager)
+        return (layoutManager, container)
+    }()
+
     /// The width is the longest line's, so a short message can hug its text.
     /// Once the container has been resized its used rect spans the whole
     /// width, so the lines are measured one by one.
     func size(for width: CGFloat) -> CGSize {
-        guard let textContainer, let layoutManager else { return CGSize(width: width, height: 24) }
+        guard let (layoutManager, textContainer) = measuring else { return CGSize(width: width, height: 24) }
         textContainer.containerSize = NSSize(width: max(1, width), height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         var longest: CGFloat = 0
@@ -329,8 +346,10 @@ struct ChatTurn: View {
             VStack(alignment: .leading, spacing: 10) {
                 if !continues || status != nil {
                     HStack(spacing: 8) {
-                        if let agent = Agent(rawValue: speaker) { PixelMark(sprite: agent.mark, color: ElevateTheme.ink) }
+                        let agent = Agent(rawValue: speaker)
+                        if let agent { PixelMark(sprite: agent.mark, color: agent.tint) }
                         Text(speaker.uppercased()).font(ElevateTheme.utility(12, medium: true))
+                            .foregroundStyle(agent?.tint ?? ElevateTheme.ink)
                         if let status { Text(status).font(.caption).foregroundStyle(ElevateTheme.graphite) }
                     }
                 }
@@ -520,6 +539,7 @@ struct ChatTableView: View {
             ?? AttributedString(text)
         return Text(content)
             .font(.system(size: 13, weight: header ? .semibold : .regular))
+            .foregroundStyle(header ? ElevateTheme.ink : ElevateTheme.reading)
             .multilineTextAlignment(alignment == .trailing ? .trailing : (alignment == .center ? .center : .leading))
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)

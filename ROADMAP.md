@@ -2,6 +2,69 @@
 
 m4ix.CLI should be a reliable macOS workspace for using Claude and Codex together on real software projects. Success requires runtime evidence as well as passing unit tests.
 
+## Calmer chat text and provider colours for 0.18.6
+
+Sir found the chat too white to read. Running text was ink, #EBEAEA on
+#141414 in dark appearance, about 15:1, and a full-width line ran past 120
+characters. Chat text now uses a reading tone, #C2C0BD in dark and #3A3838 in
+light, about 10:1, while bold and headings keep ink. The session chat's
+column is 760 points instead of 900, about 100 characters a line. The shared
+discussion keeps its own full-width layout.
+
+Each provider's name and mark in a chat turn take its colour: Claude orange,
+#D97757 in dark and #B5532F in light, and Codex teal, #56C2C9 and #0E7480.
+The light values are deeper so the 12-point name still reads. Orange and teal
+stay apart for every common colour vision, and teal is not taken for a link.
+Hermes keeps ink.
+
+The full suite ran 144 tests: four opt-in skips and the known scrollbar pixel
+failure, with the two windowed TerminalInteractionTests failing while keys
+were typed on the machine and passing when it was idle; their panel takes
+keyboard focus.
+
+## Chat text keeps its width for 0.18.5
+
+On 2026-10-12 a Codex chat showed its messages a character or a word to a
+line, running over the messages below, while their frames had the right
+size. Since 0.18.1 a message measured itself in the container it draws
+with, and SwiftUI asks for sizes it never places a view at, down to no width
+at all. The last such size stayed in the container, and macOS no longer clips
+a view to its frame. Messages now measure on a second layout of the same
+text, so the one on screen only follows the frame. The test probes a laid
+out conversation at widths of 0, 60 and 2,000 points; before the fix, a view
+placed 664 points wide was left laying out at 708.
+
+The full suite ran 143 tests: four opt-in skips and the known scrollbar
+pixel failure.
+
+## Paused conversations free their slots for 0.18.4
+
+On 2026-10-12 Codex could not be used in other projects. Four sessions held
+the four slots, every further one waited in the queue with its composer
+locked, and only the toolbar said "Queued". A session keeps its slot while it
+waits for input, so the queue never moved. Codex itself was healthy: its log
+showed nothing arriving from the app.
+
+While a launch waits and every slot is taken, the conversation unused longest
+is paused. Its CLI stops, and the session returns to the state of one
+restored at launch, resuming when it is next shown. Unused time counts
+typing, being on screen and turns of four seconds or more; an idle Claude
+redraws itself every half hour, so other output does not count. A
+conversation is paused only after five unused minutes, off screen, at its own
+input line, with no question, approval, queued text or Codex background
+terminal, no shell running below its CLI, and a conversation History can
+resume. One pauses at a time. A paused session that starts again clears its
+old screen first, since that screen's input line would pass for the new CLI
+being ready.
+
+The waiting chat names the conversation being paused, or says that all slots
+are in use and offers one more. Text typed straight into a CLI's own input
+line and left unsent is lost if that conversation is paused: neither CLI's
+input line can be read reliably, as both show placeholder text there.
+
+The full suite ran 142 tests: four opt-in skips and the known scrollbar
+pixel failure. The pause test fails without the screen reset.
+
 ## Agent activity in chat for 0.18.3
 
 Tool calls show between replies. The reader keeps each call as a step with a

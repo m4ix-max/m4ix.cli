@@ -375,6 +375,86 @@ final class ConversationChatTests: XCTestCase {
         }
     }
 
+    func testRepliesReadInASofterToneWithBoldAndHeadingsInInk() throws {
+        let text = ChatMessageFormatting.attributedText("# Plan\nPlain words and **a bold lead** then `code`.")
+        func color(of fragment: String) -> NSColor? {
+            let range = (text.string as NSString).range(of: fragment)
+            return text.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+        }
+        XCTAssertEqual(color(of: "Plan"), ElevateTheme.nsInk)
+        XCTAssertEqual(color(of: "Plain words"), ElevateTheme.nsReading)
+        XCTAssertEqual(color(of: "a bold lead"), ElevateTheme.nsInk)
+        XCTAssertEqual(color(of: "code"), ElevateTheme.nsReading)
+        XCTAssertEqual(ChatMessageFormatting.attributedText("Your own message", markdown: false)
+            .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, ElevateTheme.nsReading)
+
+        guard let output = ProcessInfo.processInfo.environment["M4IX_UI_PREVIEW_DIR"] else { return }
+        let steps = [
+            ConversationStep(id: "1", kind: .read, title: "Read host-events.jsonl", file: "/work/host-events.jsonl"),
+            ConversationStep(id: "2", kind: .run, title: "Read the launch queue logic"),
+            ConversationStep(id: "3", kind: .run, title: "Find the session limit")
+        ]
+        let conversation = VStack(alignment: .leading, spacing: 0) {
+            ChatTurn(speaker: "you", text: "Why can't I use Codex in all my projects? The chat window is unclickable.")
+            ChatTurn(speaker: "claude", text: "", steps: steps).padding(.top, 28)
+            ChatTurn(speaker: "claude", text: """
+                It isn't Codex, and it isn't your projects: m4ix.CLI runs at most four agent sessions at once, and all four are in use.
+                - **Codex in your home folder:** it reopened "Check Eira Blender rendition" at 19:12.
+                - **Three Claude sessions,** this one included.
+
+                Any further session waits in a queue, and a waiting session's message box is locked. Press `⌘⇧K`, open **Sessions** and raise the limit.
+                """, continues: true).padding(.top, 12)
+            ChatTurn(speaker: "you", text: "Make the merge more than two cards side by side.").padding(.top, 28)
+            ChatTurn(speaker: "codex", text: """
+                Sir, I'll turn this into a prototype: a blinking cursor, a prompt, and generated components you can combine.
+
+                The merge should do more than place two cards beside each other. A task list and a calendar should become a planner, with dated tasks appearing on the calendar. I'll build around that.
+                """).padding(.top, 28)
+        }
+        .padding(24).frame(maxWidth: ElevateTheme.readingWidth, alignment: .leading).frame(width: 1000)
+        .background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
+        for (name, appearance) in [("dark", NSAppearance.Name.darkAqua), ("light", .aqua)] {
+            let view = NSHostingView(rootView: conversation)
+            view.appearance = NSAppearance(named: appearance)
+            view.frame = NSRect(origin: .zero, size: view.fittingSize)
+            view.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try FileManager.default.createDirectory(at: URL(fileURLWithPath: output), withIntermediateDirectories: true)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                .write(to: URL(fileURLWithPath: output).appendingPathComponent("chat-colours-\(name).png"))
+        }
+    }
+
+    func testSizesSwiftUIOnlyAsksAboutLeaveTheShownTextAtItsWidth() throws {
+        let long = "Sir, I'll turn this into a prototype: a blinking cursor, a prompt, and generated components you can combine."
+        let controller = NSHostingController(rootView: VStack(spacing: 12) {
+            ChatTurn(speaker: "you", text: "Make the merge more than two cards side by side. " + long)
+            ChatTurn(speaker: "codex", text: long + "\n\n- A task list and a calendar become a planner.")
+        }.frame(width: 800))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentViewController = controller
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+        controller.view.layoutSubtreeIfNeeded()
+        // SwiftUI measures with proposals it does not place the view at,
+        // down to no width at all.
+        for width: CGFloat in [0, 60, 2_000] {
+            _ = controller.sizeThatFits(in: CGSize(width: width, height: 10_000))
+        }
+        let textViews = descendants(controller.view).compactMap { $0 as? ChatLinkTextView }
+        XCTAssertEqual(textViews.count, 2)
+        for textView in textViews {
+            let container = try XCTUnwrap(textView.textContainer)
+            XCTAssertEqual(container.containerSize.width, textView.frame.width, accuracy: 0.5)
+            XCTAssertGreaterThan(textView.frame.width, 300)
+            let layoutManager = try XCTUnwrap(textView.layoutManager)
+            layoutManager.ensureLayout(for: container)
+            XCTAssertLessThanOrEqual(layoutManager.usedRect(for: container).height, textView.frame.height + 0.5,
+                                     "Text must not run past the frame it was placed in")
+        }
+    }
+
     func testOpenActivityShowsOneLinePerStepAtFullAndSplitWidths() throws {
         let short = [
             ConversationStep(id: "1", kind: .read, title: "Read ConversationTranscript.swift", file: "/work/ConversationTranscript.swift"),

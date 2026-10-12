@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import XCTest
 @testable import PrivateCLIHost
@@ -376,6 +377,80 @@ final class HostedSessionTests: XCTestCase {
 
     private func hasCompleteRecord(_ url: URL) -> Bool {
         (try? Data(contentsOf: url).last) == 0x0a
+    }
+
+    func testFullSlotsPauseAnUnusedConversationAndOfferOneMoreWhenNoneCanStop() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first project")
+        let second = root.appendingPathComponent("second project")
+        for project in [first, second] { try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true) }
+        let suite = "m4ix.cli.slots." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let conversation = UUID().uuidString.lowercased()
+        defaults.set(first.path, forKey: "PrivateCLIHostWorkingDirectory")
+        defaults.set([["project": first.path, "agent": "claude", "conversation": conversation,
+                       "title": "Fix the parser", "selected": true]], forKey: "PrivateCLIHostRestorableSessions")
+        let capture = root.appendingPathComponent("launches.jsonl")
+        setenv("HOST_TEST_LAUNCH_CAPTURE", capture.path, 1)
+        defer { unsetenv("HOST_TEST_LAUNCH_CAPTURE") }
+        let model = HostModel(defaults: defaults, profileBase: root.appendingPathComponent("profiles"))
+        defer { model.stopAllSessions() }
+        model.sessionLimit = 1
+        model.pauseAfter = 0
+        // Only a conversation History knows can resume after a pause.
+        let history = model.profileBase.appendingPathComponent("claude/history.jsonl")
+        try FileManager.default.createDirectory(at: history.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let entry: [String: Any] = ["sessionId": conversation, "timestamp": 1_790_000_000_000, "project": first.path, "display": "Fix the parser"]
+        try (JSONSerialization.data(withJSONObject: entry) + Data([0x0a])).write(to: history)
+        model.refreshHistory()
+        model.restoreSessions()
+        model.selected = .claude
+        model.startCurrentIfPending()
+        let unused = model.currentSession
+        try await waitUntil {
+            model.updateAttention()
+            unused.refreshPromptReadiness()
+            return unused.acceptsPromptText && model.conversations.contains { $0.sessionID == conversation }
+        }
+
+        model.openWorkspace(second)
+        model.selected = .codex
+        XCTAssertTrue(model.startNewConversation())
+        let waiting = model.currentSession
+        XCTAssertEqual(waiting.state, .queued)
+        try await waitUntil { model.updateAttention(); return waiting.state.isRunning }
+        XCTAssertEqual(unused.state, .idle)
+        XCTAssertTrue(unused.isPaused)
+        XCTAssertEqual(unused.pendingResumeID, conversation)
+        XCTAssertNil(waiting.slotWait)
+
+        // The Codex conversation has nothing to resume yet, so it is not paused in turn.
+        model.selectProject(ProjectRecord(path: first.path))
+        model.selected = .claude
+        XCTAssertEqual(model.currentSession.id, unused.id)
+        model.startCurrentIfPending()
+        model.updateAttention()
+        XCTAssertEqual(unused.state, .queued)
+        XCTAssertEqual(unused.slotWait?.raisedLimit, 2)
+        XCTAssertTrue(waiting.state.isRunning)
+        // Read the screen as the session starts again, before its new CLI can draw.
+        var readyAtStart: Bool?
+        let start = unused.$state.sink { state in
+            guard case .running = state, readyAtStart == nil else { return }
+            readyAtStart = CLIPrompt.acceptsText(screen: CLIPrompt.liveScreen(of: unused.terminal), agent: .claude)
+        }
+        defer { start.cancel() }
+        model.sessionLimit = 2
+        try await waitUntil { model.updateAttention(); unused.refreshPromptReadiness(); return unused.acceptsPromptText }
+        XCTAssertEqual(readyAtStart, false, "The screen it was paused under must not pass for the new CLI")
+        XCTAssertFalse(unused.isPaused)
+        XCTAssertNil(unused.slotWait)
+        XCTAssertEqual(unused.activeConversationID, conversation)
+        let launches = try String(contentsOf: capture, encoding: .utf8).split(separator: "\n")
+        let resumed = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try XCTUnwrap(launches.last).utf8)) as? [String: Any])
+        XCTAssertEqual((resumed["arguments"] as? [String])?.suffix(2), ["--resume", conversation])
     }
 
     private func waitUntil(file: StaticString = #filePath, line: UInt = #line, _ condition: () -> Bool) async throws {

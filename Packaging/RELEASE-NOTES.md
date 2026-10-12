@@ -1,3 +1,27 @@
+# m4ix.CLI 0.18.6
+
+Chat is calmer to read. Running text sits a step below full white, while bold
+lead-ins and headings keep it and stand out, and the conversation column is
+narrower, so a line holds about 100 characters. Claude's name and mark are
+orange in chat, and Codex's are teal.
+
+# m4ix.CLI 0.18.5
+
+Chat text keeps its width. A message could be laid out a character or a word
+to a line and run over the messages below it, after the chat measured it for
+a size it then did not use. Measuring now happens apart from the text on
+screen.
+
+# m4ix.CLI 0.18.4
+
+A conversation waiting for a free slot now says so in its chat, instead of
+leaving a composer that cannot be clicked. When every slot is taken, the
+conversation unused longest is paused to make room: it stops cleanly and
+resumes where it left off when you open it. A conversation that is working,
+waiting on a question or an approval, or running a command in the background
+is never paused. When none can be paused, the waiting chat offers to allow
+one more session.
+
 # m4ix.CLI 0.18.3
 
 The chat shows what the agent did between replies. Each run of tool calls

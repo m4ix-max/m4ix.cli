@@ -446,7 +446,8 @@ private struct SessionControlRow: View {
             }
             Text("\(URL(fileURLWithPath: session.projectPath).lastPathComponent) · \(profile) · \(session.agent.title)").foregroundStyle(.secondary)
             HStack {
-                Text(session.pendingResumeID != nil && session.state == .idle ? "Restored" : session.state.description)
+                Text(session.pendingResumeID != nil && session.state == .idle
+                     ? (session.isPaused ? "Paused" : "Restored") : session.state.description)
                 if attention != nil { Text("Your turn").foregroundStyle(.orange) }
                 if session.state.isRunning, !HostHealth.isProcessAlive(session.terminal.process.shellPid) { Text("Process no longer responds").foregroundStyle(.red) }
                 Spacer()

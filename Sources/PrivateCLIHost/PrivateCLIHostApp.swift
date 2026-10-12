@@ -21,6 +21,13 @@ enum Agent: String, CaseIterable, Identifiable, Hashable {
         case .hermes: return .hermes
         }
     }
+    var tint: SwiftUI.Color {
+        switch self {
+        case .claude: return ElevateTheme.claude
+        case .codex: return ElevateTheme.codex
+        case .hermes: return ElevateTheme.ink
+        }
+    }
 
     /// The providers that share the window side by side. Hermes is shown alone.
     static let sideBySide: [Agent] = [.claude, .codex]
@@ -86,6 +93,13 @@ enum TerminalAction: String {
     case resume
 
     var title: String { self == .login ? "Login" : "CLI" }
+}
+
+/// Why a queued session waits to start, shown in its chat.
+struct SlotWait: Equatable {
+    let message: String
+    /// The limit to offer when no conversation can be paused for this one.
+    let raisedLimit: Int?
 }
 
 enum TerminalState: Equatable {
@@ -243,6 +257,10 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     @Published private(set) var codexSessionIDPrefix: String?
     /// A conversation restored from the previous launch, resumed when first shown.
     @Published private(set) var pendingResumeID: String?
+    /// Stopped to free a slot for another session; resumes when next shown.
+    @Published private(set) var isPaused = false
+    /// Why this queued session has not started yet.
+    @Published var slotWait: SlotWait?
     @Published private(set) var isWorking = false
     /// Whether the CLI's own input line holds the screen, so the prompt
     /// bar can type into it. Refreshed once a second while shown.
@@ -270,6 +288,8 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     private var promptTask: Task<Void, Never>?
     private var launchedAt: Date?
     private var hermesQuestionOpen = false
+    private var lastTurnEnded: Date?
+    private var pausingConversationID: String?
 
     init(agent: Agent, projectPath: String, title: String, initialPrompt: String? = nil,
          pendingResumeID: String? = nil, profileBase: URL = HostPaths.profileBase, profileID: String = "default",
@@ -318,7 +338,42 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         noteHermesQuestion()
         let ended = turns.update(outputAge: terminal.activity.outputAge(now: now), now: now)
         if isWorking != turns.isWorking { isWorking = turns.isWorking }
+        if ended { lastTurnEnded = now }
         return ended
+    }
+
+    /// How long since this conversation was last used: typed into, shown,
+    /// or ending a turn. Idle CLIs redraw now and then, so other output
+    /// does not count.
+    func unusedTime(now: Date) -> TimeInterval {
+        let ages = [terminal.activity.inputAge(now: now), lastSeen.map { now.timeIntervalSince($0) },
+                    lastTurnEnded.map { now.timeIntervalSince($0) }, launchedAt.map { now.timeIntervalSince($0) }]
+        return ages.compactMap { $0 }.min() ?? 0
+    }
+
+    /// Whether the CLI can stop without losing anything: it waits at its own
+    /// input line, with no question, queued text or command still running.
+    var canPause: Bool {
+        guard hostsConversation, activeConversationID != nil, pausingConversationID == nil,
+              !isWorking, !isSendingPrompt, queuedPrompt == nil else { return false }
+        let screen = CLIPrompt.liveScreen(of: terminal)
+        guard CLIPrompt.acceptsText(screen: screen, agent: agent) else { return false }
+        if agent == .codex, CLIPrompt.codexQuestionOpenBytes(in: screen) != nil || CLIPrompt.backgroundTerminalCount(in: screen) > 0 {
+            return false
+        }
+        return !HostHealth.runsShell(below: terminal.process.shellPid)
+    }
+
+    var isPausing: Bool { pausingConversationID != nil }
+
+    /// Stops the CLI to free its slot. The conversation stays where it was
+    /// and resumes when next shown, as one restored at launch does.
+    func pause() {
+        guard canPause, let id = activeConversationID else { return }
+        pausingConversationID = id
+        HostDiagnostics.record("session_paused", agent: agent.rawValue, session: self.id,
+                               details: ["unusedMinutes": Int(unusedTime(now: Date()) / 60)])
+        stop()
     }
 
     func takeNotification() -> String? {
@@ -570,10 +625,18 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         // environment never picks a model the toolbar did not show.
         environment["PRIVATE_CLI_HOST_MODEL"] = choice.model
         environment["PRIVATE_CLI_HOST_EFFORT"] = choice.effort
+        if launchedAt != nil {
+            // A paused session starts again under its last screen, whose
+            // input line would pass for the new CLI being ready.
+            terminal.feed(text: "\u{1b}c")
+            hideCaret()
+        }
         launchedDirectory = directory
         launchedAt = Date()
         launchedChoice = choice
         pendingResumeID = nil
+        isPaused = false
+        slotWait = nil
         activeConversationID = sessionID?.lowercased()
         HostDiagnostics.record("session_start_requested", agent: agent.rawValue, session: id)
         state = .running(action)
@@ -672,6 +735,12 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         isWorking = false
         hideCaret()
         refreshAccountStatus(in: launchedDirectory ?? FileManager.default.homeDirectoryForCurrentUser)
+        if let id = pausingConversationID {
+            pausingConversationID = nil
+            pendingResumeID = id
+            isPaused = true
+            state = .idle
+        }
         onStateExit?()
     }
 
@@ -836,6 +905,9 @@ final class HostModel: ObservableObject {
             drainLaunchQueue()
         }
     }
+    /// How long a conversation goes unused before it may be paused for a
+    /// session waiting for a slot.
+    var pauseAfter: TimeInterval = 300
     @Published var pendingUpdate: URL? {
         didSet {
             if let pendingUpdate { preferences.set(pendingUpdate.path, forKey: "PrivateCLIHostPendingUpdate") }
@@ -1336,6 +1408,7 @@ final class HostModel: ObservableObject {
         while activeSessionCount + preparingLaunches.count < sessionLimit, !launchQueue.isEmpty {
             let request = launchQueue.removeFirst()
             let session = request.session
+            session.slotWait = nil
             preparingLaunches.insert(session.id)
             let directory = URL(fileURLWithPath: session.projectPath)
             let base = session.profileBase
@@ -1364,6 +1437,51 @@ final class HostModel: ObservableObject {
                 self.drainLaunchQueue()
             }
         }
+        pauseForWaitingLaunch()
+    }
+
+    /// Every slot is taken while a launch waits: the conversation unused
+    /// longest is paused, one at a time, and resumes when next shown.
+    private func pauseForWaitingLaunch() {
+        let waiting = launchQueue.map(\.session)
+        guard !waiting.isEmpty else { return }
+        let now = Date()
+        let live = workspaces.values.flatMap(\.allLiveSessions)
+        var pausing = live.first(where: \.isPausing)
+        if pausing == nil, let candidate = pauseCandidate(in: live, now: now) {
+            candidate.pause()
+            pausing = candidate
+        }
+        let wait = pausing.map { session in
+            SlotWait(message: "Waiting for a free slot. Pausing \(session.agent.title) · \(session.displayTitle), unused for "
+                     + "\(Self.duration(session.unusedTime(now: now))); it resumes when you open it.", raisedLimit: nil)
+        } ?? SlotWait(message: "Waiting for a free slot: \(sessionLimit == 1 ? "the only one is" : "all \(sessionLimit) are") in use. "
+                      + "This starts when a conversation ends or has gone unused for \(Self.duration(pauseAfter)).",
+                      raisedLimit: sessionLimit < 16 ? sessionLimit + 1 : nil)
+        for session in waiting where session.slotWait != wait { session.slotWait = wait }
+    }
+
+    /// The conversation unused longest that can stop without losing anything
+    /// and resume from History. Conversations on screen are never paused.
+    private func pauseCandidate(in sessions: [TerminalSession], now: Date) -> TerminalSession? {
+        let visible = Set(visibleSessions.map(\.id))
+        return sessions.filter { session in
+            guard session.hostsConversation, !visible.contains(session.id), session.unusedTime(now: now) >= pauseAfter,
+                  let id = session.activeConversationID,
+                  historyByProfile[session.profileID]?.contains(where: {
+                      $0.provider == session.agent.rawValue && $0.sessionID.caseInsensitiveCompare(id) == .orderedSame
+                  }) == true else { return false }
+            return session.canPause
+        }
+        .max { $0.unusedTime(now: now) < $1.unusedTime(now: now) }
+    }
+
+    private static func duration(_ interval: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute]
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = 1
+        return formatter.string(from: max(60, interval)) ?? "a while"
     }
 
     func startWorkflowAgent(project: String, profile: String, provider: String, prompt: String) -> UUID? {
@@ -1947,7 +2065,7 @@ private struct PaneHeader: View {
     }
 
     private var status: String {
-        if session.pendingResumeID != nil { return "RESTORED" }
+        if session.pendingResumeID != nil { return session.isPaused ? "PAUSED" : "RESTORED" }
         if session.hostsConversation {
             return session.isWorking ? "WORKING" : session.acceptsPromptText ? "READY" : "NEEDS INPUT"
         }
@@ -2492,7 +2610,7 @@ private struct ProjectSidebar: View {
 
 private struct LiveConversationRow: View {
     private var status: String {
-        if session.pendingResumeID != nil { return "RESTORED" }
+        if session.pendingResumeID != nil { return session.isPaused ? "PAUSED" : "RESTORED" }
         if attentionMessage != nil { return "YOUR TURN" }
         guard case .running = session.state else { return session.state.description.uppercased() }
         return session.isWorking ? "WORKING" : "WAITING"
@@ -2525,9 +2643,9 @@ private struct LiveConversationRow: View {
                         .foregroundStyle(attentionMessage != nil ? ElevateTheme.ink : ElevateTheme.graphite)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .help(session.pendingResumeID != nil
-                      ? "Saved from the previous launch. Select to start the CLI and resume."
-                      : attentionMessage ?? "")
+                .help(session.pendingResumeID == nil ? attentionMessage ?? ""
+                      : session.isPaused ? "Paused to free a slot for another session. Select to resume."
+                      : "Saved from the previous launch. Select to start the CLI and resume.")
             }
             .padding(.horizontal, ElevateTheme.spacing8)
             .padding(.vertical, 12)
@@ -2851,11 +2969,13 @@ struct HostView: View {
                 isActive: isActive,
                 onActivate: { activate(agent) },
                 onPromptFocus: { activate(agent); requestPromptFocus(agent) },
-                onTerminal: { focusTerminal(for: agent) }) { images in
-                imageDrafts[key, default: []] += images
-                persistDraft(key: key, session: session)
-                requestPromptFocus(agent)
-            }
+                onTerminal: { focusTerminal(for: agent) },
+                onPasteImages: { images in
+                    imageDrafts[key, default: []] += images
+                    persistDraft(key: key, session: session)
+                    requestPromptFocus(agent)
+                },
+                onAllowMoreSessions: { model.sessionLimit = max(model.sessionLimit, $0) })
                 .id(key)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             PromptBar(
