@@ -103,24 +103,28 @@ struct SessionConversationView: View {
                     }
                     ForEach(Array(transcript.messages.enumerated()), id: \.element.id) { index, message in
                         let continues = index > 0 && transcript.messages[index - 1].speaker == message.speaker
-                        ChatTurn(speaker: message.speaker, text: message.text, continues: continues)
+                        ChatTurn(speaker: message.speaker, text: message.text, continues: continues, steps: message.steps)
                             .padding(.top, index == 0 ? 0 : (continues ? 12 : 28) as CGFloat).id(message.id)
                     }
                     if let error = transcript.error {
                         Text(error).font(.callout).foregroundStyle(ElevateTheme.graphite).padding(.top, 28)
                     }
                     if session.isWorking {
+                        // The latest step says more than "working": Claude logs a
+                        // step as it starts, Codex and Hermes once it is done.
+                        let latest = transcript.messages.last?.steps.last
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("\(session.agent.title) is working…").font(.caption).foregroundStyle(ElevateTheme.graphite)
-                        }.padding(.top, 28)
+                            Text(latest?.title ?? "\(session.agent.title) is working…").lineLimit(1).truncationMode(.tail)
+                                .font(.caption).foregroundStyle(ElevateTheme.graphite)
+                        }.padding(.top, latest == nil ? 28 : 12)
                     }
                     Color.clear.frame(height: 1).id("latest")
                         .onAppear { followsLatest = true }
                         .onDisappear { followsLatest = false }
                 }.padding(24).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity)
             }
-            .onChange(of: transcript.messages.count) { _ in
+            .onChange(of: transcript.messages.last) { _ in
                 if followsLatest { proxy.scrollTo("latest", anchor: .bottom) }
             }
             .overlay(alignment: .bottomTrailing) {

@@ -1,3 +1,11 @@
+# m4ix.CLI 0.18.3
+
+The chat shows what the agent did between replies. Each run of tool calls
+becomes one quiet line, such as "Read 3 files, edited 2 files and ran 9
+commands", that opens to the list of steps. While the agent works, the line
+under the conversation names its latest step instead of only saying it is
+working. Claude, Codex and Hermes are each read from their own logs.
+
 # m4ix.CLI 0.18.2
 
 Replies in chat show their formatting. Lists hang from their bullets and

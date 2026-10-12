@@ -2,6 +2,29 @@
 
 m4ix.CLI should be a reliable macOS workspace for using Claude and Codex together on real software projects. Success requires runtime evidence as well as passing unit tests.
 
+## Agent activity in chat for 0.18.3
+
+Tool calls show between replies. The reader keeps each call as a step with a
+build-log title: Claude's own description of a command, the file a read or an
+edit touched, a search's pattern, a page's host. Consecutive steps share one
+row that summarises them by kind, counting a file once however often it was
+read or edited, and opens to one line per step. While a turn runs, the
+working line names the latest step. Claude logs a step as it starts; Codex
+and Hermes log one when it ends, so for them the line trails by a step.
+
+Before this the chat dropped every tool row, and a long task showed only
+"is working" until the reply. Codex steps come from the items it completes,
+which name the command and files, rather than from the script its own tool
+calls wrap them in. A command Codex could parse becomes one step per part,
+and a timer wait is not a step.
+
+On 2026-10-12 the reader ran over real logs: this session's Claude log gave
+459 steps in 66 rows, a Codex session 183 in 21 and a Hermes session 67 in
+44. The row was rendered open and closed at 800 and 440 points, and a long
+step truncates instead of wrapping.
+The full suite ran 140 tests: four opt-in skips and the known scrollbar
+pixel failure.
+
 ## Formatted replies in chat for 0.18.2
 
 Replies show their Markdown structure. Bullets and numbers become hanging

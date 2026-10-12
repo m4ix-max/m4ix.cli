@@ -314,6 +314,7 @@ struct ChatTurn: View {
     let text: String
     var status: String?
     var continues = false
+    var steps: [ConversationStep] = []
 
     var body: some View {
         if speaker == "you" {
@@ -333,10 +334,46 @@ struct ChatTurn: View {
                         if let status { Text(status).font(.caption).foregroundStyle(ElevateTheme.graphite) }
                     }
                 }
-                if text.isEmpty { ProgressView().controlSize(.small) }
+                if !steps.isEmpty { ChatActivity(steps: steps) }
+                else if text.isEmpty { ProgressView().controlSize(.small) }
                 else { ChatMessageBody(text: text) }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// The tool steps between two replies: one quiet line that opens to the list.
+struct ChatActivity: View {
+    let steps: [ConversationStep]
+    @State var expanded = false
+
+    var body: some View {
+        let summary = ConversationStep.summary(steps)
+        VStack(alignment: .leading, spacing: 6) {
+            Button { expanded.toggle() } label: {
+                HStack(spacing: 8) {
+                    // As wide as the working spinner, so both lines share a text edge.
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0)).frame(width: 16)
+                    Text(summary).lineLimit(1).truncationMode(.tail)
+                }.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(expanded ? "Hide the steps" : "Show each step")
+            .accessibilityLabel(summary)
+            .accessibilityHint(expanded ? "Hides the steps" : "Shows each step")
+            if expanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(steps, id: \.id) { step in
+                        Text(step.title).lineLimit(1).truncationMode(.tail)
+                    }
+                }
+                .padding(.leading, 24)
+                .textSelection(.enabled)
+            }
+        }
+        .font(.caption).foregroundStyle(ElevateTheme.graphite)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

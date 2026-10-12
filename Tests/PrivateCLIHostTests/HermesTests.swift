@@ -216,7 +216,7 @@ final class HermesTests: XCTestCase {
             "INSERT INTO sessions (id, source, cwd, parent_session_id) VALUES ('20261001_120000_bbbbbb', 'cli', '/tmp', '20261001_090000_aaaaaa')",
             "INSERT INTO sessions (id, source, cwd, parent_session_id) VALUES ('20261001_130000_cccccc', 'cli', '/tmp', '20261001_120000_bbbbbb')",
             "INSERT INTO messages (session_id, role, content, timestamp) VALUES ('20261001_090000_aaaaaa', 'user', 'Fix the parser', 1)",
-            "INSERT INTO messages (session_id, role, content, timestamp) VALUES ('20261001_090000_aaaaaa', 'assistant', '', 2)",
+            #"INSERT INTO messages (session_id, role, content, tool_calls, timestamp) VALUES ('20261001_090000_aaaaaa', 'assistant', '', '[{"id": "call-1", "type": "function", "function": {"name": "terminal", "arguments": "{\"command\": \"cd /tmp && swift test\"}"}}, {"id": "call-2", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\": \"/tmp/Parser.swift\"}"}}]', 2)"#,
             "INSERT INTO messages (session_id, role, content, timestamp) VALUES ('20261001_090000_aaaaaa', 'tool', '{\"ok\": true}', 3)",
             "INSERT INTO messages (session_id, role, content, timestamp) VALUES ('20261001_090000_aaaaaa', 'assistant', 'Done.', 4)",
             "INSERT INTO messages (session_id, role, content, timestamp, display_kind) VALUES ('20261001_090000_aaaaaa', 'assistant', 'Hidden note', 5, 'hidden')",
@@ -232,12 +232,13 @@ final class HermesTests: XCTestCase {
         let first = await reader.read()
         XCTAssertTrue(first.foundFile)
         XCTAssertNil(first.error)
-        XCTAssertEqual(first.messages.map(\.speaker), ["you", "hermes", "you", "hermes"])
-        XCTAssertEqual(first.messages.map(\.text), ["Fix the parser", "Done.", "Now the tests", "Tests pass."])
+        XCTAssertEqual(first.messages.map(\.speaker), ["you", "hermes", "hermes", "you", "hermes"])
+        XCTAssertEqual(first.messages.map(\.text), ["Fix the parser", "", "Done.", "Now the tests", "Tests pass."])
+        XCTAssertEqual(first.messages[1].steps.map(\.title), ["Run swift test", "Read Parser.swift"])
 
         try execute(home, "INSERT INTO messages (session_id, role, content, timestamp) VALUES ('20261001_120000_bbbbbb', 'assistant', 'One more thing.', 11)")
         let second = await reader.read()
-        XCTAssertEqual(second.messages.map(\.text), ["Fix the parser", "Done.", "Now the tests", "Tests pass.", "One more thing."])
+        XCTAssertEqual(second.messages.map(\.text), ["Fix the parser", "", "Done.", "Now the tests", "Tests pass.", "One more thing."])
         XCTAssertEqual(Set(second.messages.map(\.id)).count, second.messages.count)
 
         let unknown = await ConversationTranscriptReader(agent: .hermes, profile: home, conversationID: "20261009_090000_999999").read()
@@ -258,7 +259,7 @@ final class HermesTests: XCTestCase {
             CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, cwd TEXT, title TEXT, parent_session_id TEXT,
                 end_reason TEXT, archived INTEGER NOT NULL DEFAULT 0, started_at REAL NOT NULL DEFAULT 0);
             CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,
-                content TEXT, timestamp REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1, display_kind TEXT);
+                content TEXT, tool_calls TEXT, timestamp REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1, display_kind TEXT);
             """)
         for statement in statements { try execute(home, statement) }
         return home

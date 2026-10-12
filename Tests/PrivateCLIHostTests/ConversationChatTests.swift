@@ -95,6 +95,72 @@ final class ConversationTranscriptTests: XCTestCase {
         XCTAssertEqual(loaded.messages.map(\.text), ["Correct conversation"])
     }
 
+    func testClaudeToolCallsBecomeStepsBetweenReplies() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID().uuidString.lowercased()
+        let file = try logFile(root, agent: .claude, id: id)
+        try write([
+            claudeMessage("user", content: "Fix the parser", id: "u1", session: id),
+            claudeMessage("assistant", content: [toolUse("t1", "Read", ["file_path": "/work/Parser.swift"])], id: "a1", session: id),
+            claudeMessage("user", content: [["type": "tool_result", "tool_use_id": "t1", "content": "Hidden source"]], id: "r1", session: id),
+            claudeMessage("assistant", content: [toolUse("t2", "Edit", ["file_path": "/work/Parser.swift"])], id: "a2", session: id),
+            claudeMessage("assistant", content: [toolUse("t3", "Edit", ["file_path": "/work/Parser.swift"])], id: "a3", session: id),
+            claudeMessage("assistant", content: [toolUse("t4", "Bash", ["command": "swift test", "description": "Run the parser tests"])], id: "a4", session: id),
+            claudeMessage("assistant", content: [toolUse("t5", "Bash", ["command": "cd \"/work dir\" && swift build\necho done"])], id: "a5", session: id),
+            claudeMessage("assistant", content: [toolUse("t5", "Bash", ["command": "swift build"])], id: "a5", session: id),
+            claudeMessage("assistant", content: [toolUse("t6", "Read", ["file_path": "/subagent"])], id: "s1", session: id, sidechain: true),
+            claudeMessage("assistant", content: "Fixed.", id: "a6", session: id),
+            claudeMessage("assistant", content: [toolUse("t7", "mcp__claude_ai_Gmail__search_threads", [:])], id: "a7", session: id)
+        ], to: file)
+        let snapshot = await ConversationTranscriptReader(agent: .claude, profile: root, conversationID: id).read()
+        XCTAssertEqual(snapshot.messages.map(\.speaker), ["you", "claude", "claude", "claude"])
+        XCTAssertEqual(snapshot.messages.map(\.text), ["Fix the parser", "", "Fixed.", ""])
+        XCTAssertEqual(snapshot.messages[1].steps.map(\.title),
+                       ["Read Parser.swift", "Edit Parser.swift", "Edit Parser.swift", "Run the parser tests", "Run swift build"])
+        XCTAssertEqual(ConversationStep.summary(snapshot.messages[1].steps), "Read 1 file, edited 1 file and ran 2 commands")
+        XCTAssertEqual(snapshot.messages[3].steps.map(\.title), ["Gmail: search threads"])
+        XCTAssertEqual(ConversationStep.summary(snapshot.messages[3].steps), "Used 1 tool")
+    }
+
+    func testCodexStepsComeFromCompletedItems() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID().uuidString.lowercased()
+        let file = try logFile(root, agent: .codex, id: id)
+        func completed(_ item: [String: Any]) -> [String: Any] {
+            ["type": "event_msg", "payload": ["type": "item_completed", "item": item]]
+        }
+        try write([
+            codexMessage("user", "Tidy the readme"),
+            ["type": "response_item", "payload": ["type": "custom_tool_call", "name": "exec", "input": "const hidden = 1"]],
+            completed(["type": "CommandExecution", "id": "c1", "command": ["/bin/zsh", "-lc", "ls docs && cat docs/README.md"],
+                       "parsed_cmd": [["type": "list_files", "cmd": "ls docs", "path": "docs"],
+                                      ["type": "read", "cmd": "cat docs/README.md", "name": "README.md", "path": "docs/README.md"]]]),
+            completed(["type": "CommandExecution", "id": "c2", "command": ["/bin/zsh", "-lc", "swift test 2>&1 | tail\nexit"],
+                       "parsed_cmd": [["type": "unknown", "cmd": "swift test 2>&1 | tail"]]]),
+            completed(["type": "FileChange", "id": "f1", "changes": ["docs/README.md": ["type": "update"], "docs/NEW.md": ["type": "add"]]]),
+            completed(["type": "Extension", "kind": "clock.sleep", "id": "e0"]),
+            completed(["type": "Extension", "kind": "web.search", "id": "e1", "query": "swift testing",
+                       "action": ["type": "search", "query": "swift testing"]]),
+            completed(["type": "Extension", "kind": "web.search", "id": "e2",
+                       "action": ["type": "openPage", "url": "https://www.swift.org/documentation/"]]),
+            completed(["type": "AgentMessage", "id": "m1", "content": [["type": "Text", "text": "Mirrored reply"]]]),
+            codexMessage("assistant", "Tidied.", phase: "final_answer")
+        ], to: file)
+        let snapshot = await ConversationTranscriptReader(agent: .codex, profile: root, conversationID: id).read()
+        XCTAssertEqual(snapshot.messages.map(\.text), ["Tidy the readme", "", "Tidied."])
+        XCTAssertEqual(snapshot.messages[1].steps.map(\.title), ["List files in docs", "Read README.md", "Run swift test 2>&1 | tail",
+                                                                 "Create NEW.md", "Edit README.md", "Search the web for swift testing",
+                                                                 "Open www.swift.org"])
+        XCTAssertEqual(ConversationStep.summary(snapshot.messages[1].steps),
+                       "Read 1 file, searched once, edited 2 files, ran 1 command and used the web 2 times")
+    }
+
+    private func toolUse(_ id: String, _ name: String, _ input: [String: Any]) -> [String: Any] {
+        ["type": "tool_use", "id": id, "name": name, "input": input]
+    }
+
     private func codexMessage(_ role: String, _ text: String, phase: String = "") -> [String: Any] {
         ["type": "response_item", "payload": ["type": "message", "id": "", "role": role, "phase": phase,
             "content": [["type": role == "user" ? "input_text" : "output_text", "text": text]]]]
@@ -253,6 +319,9 @@ final class ConversationChatTests: XCTestCase {
         let messages: [[String: Any]] = [
             ["type": "user", "uuid": "user", "sessionId": id, "message": ["role": "user", "content": "Can I click website links in this chat?"]],
             ["type": "assistant", "uuid": "reply", "sessionId": id, "message": ["role": "assistant", "content": [["type": "text", "text": "Yes. Open [Example](https://example.com) or https://example.org directly.\n\n```sh\necho 'Readable code, with a Copy button'\n```\n\nYou can select and copy this reply."]]]],
+            ["type": "assistant", "uuid": "tools", "sessionId": id, "message": ["role": "assistant", "content": [
+                ["type": "tool_use", "id": "t1", "name": "Read", "input": ["file_path": "/work/ChatMessageText.swift"]],
+                ["type": "tool_use", "id": "t2", "name": "Bash", "input": ["command": "swift test", "description": "Run the chat tests"]]]]],
             ["type": "assistant", "uuid": "more", "sessionId": id, "message": ["role": "assistant", "content": [["type": "text", "text": "A second message in the same reply shares its header."]]]],
             ["type": "user", "uuid": "next", "sessionId": id, "message": ["role": "user", "content": "Start the notch"]]
         ]
@@ -302,6 +371,41 @@ final class ConversationChatTests: XCTestCase {
                 let directory = URL(fileURLWithPath: output)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("conversation-chat-\(width).png"))
+            }
+        }
+    }
+
+    func testOpenActivityShowsOneLinePerStepAtFullAndSplitWidths() throws {
+        let short = [
+            ConversationStep(id: "1", kind: .read, title: "Read ConversationTranscript.swift", file: "/work/ConversationTranscript.swift"),
+            ConversationStep(id: "2", kind: .search, title: "Search for ConversationTranscriptReader"),
+            ConversationStep(id: "3", kind: .edit, title: "Edit ChatMessageText.swift", file: "/work/ChatMessageText.swift"),
+            ConversationStep(id: "4", kind: .run, title: "Run the chat tests")
+        ]
+        var long = short
+        long[3] = ConversationStep(id: "4", kind: .run, title: "Run " + Array(repeating: "swift test --filter ConversationChatTests", count: 6).joined(separator: " && "))
+        for width in [800, 440] {
+            func height(_ steps: [ConversationStep]) -> CGFloat {
+                NSHostingController(rootView: ChatActivity(steps: steps, expanded: true))
+                    .sizeThatFits(in: CGSize(width: CGFloat(width - 48), height: .greatestFiniteMagnitude)).height
+            }
+            XCTAssertEqual(height(long), height(short), accuracy: 0.5, "A long step truncates instead of wrapping")
+            XCTAssertGreaterThan(height(short), NSHostingController(rootView: ChatActivity(steps: short))
+                .sizeThatFits(in: CGSize(width: CGFloat(width - 48), height: .greatestFiniteMagnitude)).height * 3)
+            if let output = ProcessInfo.processInfo.environment["M4IX_UI_PREVIEW_DIR"] {
+                let turn = VStack(alignment: .leading, spacing: 12) {
+                    ChatTurn(speaker: "claude", text: "Reading the transcript code first.")
+                    ChatActivity(steps: long, expanded: true)
+                    ChatTurn(speaker: "claude", text: "The reader now keeps tool calls.", continues: true)
+                    ChatActivity(steps: short)
+                }.padding(24).frame(width: CGFloat(width)).background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
+                let view = NSHostingView(rootView: turn)
+                view.frame = NSRect(origin: .zero, size: view.fittingSize)
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let directory = URL(fileURLWithPath: output)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("chat-activity-\(width).png"))
             }
         }
     }

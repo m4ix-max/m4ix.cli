@@ -5,6 +5,20 @@ struct ConversationMessage: Identifiable, Equatable, Sendable {
     let id: String
     let speaker: String
     let text: String
+    /// The tool steps an agent took between two replies. A message carries
+    /// either text or steps, never both.
+    var steps: [ConversationStep] = []
+}
+
+/// One tool call, titled the way a build log titles a step.
+struct ConversationStep: Equatable, Sendable {
+    enum Kind: Sendable { case read, search, edit, run, web, other }
+
+    let id: String
+    let kind: Kind
+    let title: String
+    /// The file a read or an edit touched, so a summary counts it once.
+    var file: String?
 }
 
 struct ConversationTranscriptSnapshot: Equatable, Sendable {
@@ -107,7 +121,7 @@ actor ConversationTranscriptReader {
                 JOIN chain ON parent.id = chain.id
                 WHERE parent.end_reason = 'compression'
             )
-            SELECT id, role, content FROM messages
+            SELECT id, role, content, tool_calls FROM messages
             WHERE session_id IN chain AND id > ?2 AND role IN ('user', 'assistant')
               AND IFNULL(active, 1) != 0 AND IFNULL(display_kind, '') != 'hidden'
             ORDER BY id
@@ -129,6 +143,16 @@ actor ConversationTranscriptReader {
             let isSummary = role == "user" && (text.hasPrefix("[CONTEXT COMPACTION") || text.hasPrefix("[CONTEXT SUMMARY]"))
             if !isSummary, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 snapshot.messages.append(ConversationMessage(id: "hermes:\(row)", speaker: role == "user" ? "you" : "hermes", text: text))
+            }
+            if role == "assistant", let calls = sqlite3_column_text(statement, 3),
+               let list = try? JSONSerialization.jsonObject(with: Data(String(cString: calls).utf8)) as? [[String: Any]] {
+                for (index, call) in list.enumerated() {
+                    guard let function = call["function"] as? [String: Any], let name = function["name"] as? String else { continue }
+                    let arguments = (function["arguments"] as? String).flatMap {
+                        try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+                    } ?? [:]
+                    append(.hermes(id: call["id"] as? String ?? "hermes:\(row):\(index)", name: name, arguments: arguments))
+                }
             }
             step = sqlite3_step(statement)
         }
@@ -193,6 +217,13 @@ actor ConversationTranscriptReader {
             message = content
             key = messageKey(row["uuid"] as? String)
         } else {
+            // Tool calls are read from the items Codex completes, which
+            // carry the command and files rather than the script around them.
+            if row["type"] as? String == "event_msg", let payload = row["payload"] as? [String: Any],
+               payload["type"] as? String == "item_completed", let item = payload["item"] as? [String: Any] {
+                ConversationStep.codex(item).forEach(append)
+                return
+            }
             // event_msg mirrors these response items, so reading both would
             // repeat replies. Reasoning and tool output are separate items.
             guard row["type"] as? String == "response_item",
@@ -205,8 +236,24 @@ actor ConversationTranscriptReader {
         }
         guard let role = message["role"] as? String, ["user", "assistant"].contains(role) else { return }
         let text = visibleText(message["content"], role: role)
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, seen.insert(key).inserted else { return }
-        snapshot.messages.append(ConversationMessage(id: key, speaker: role == "user" ? "you" : agent.rawValue, text: text))
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, seen.insert(key).inserted {
+            snapshot.messages.append(ConversationMessage(id: key, speaker: role == "user" ? "you" : agent.rawValue, text: text))
+        }
+        guard agent == .claude, role == "assistant", let blocks = message["content"] as? [[String: Any]] else { return }
+        for block in blocks where block["type"] as? String == "tool_use" {
+            guard let id = block["id"] as? String, let name = block["name"] as? String else { continue }
+            append(.claude(id: id, name: name, input: block["input"] as? [String: Any] ?? [:]))
+        }
+    }
+
+    /// Steps in a row share one activity entry; a message starts the next.
+    private func append(_ step: ConversationStep) {
+        guard seen.insert("step:" + step.id).inserted else { return }
+        if let last = snapshot.messages.indices.last, !snapshot.messages[last].steps.isEmpty {
+            snapshot.messages[last].steps.append(step)
+        } else {
+            snapshot.messages.append(ConversationMessage(id: "steps:" + step.id, speaker: agent.rawValue, text: "", steps: [step]))
+        }
     }
 
     private func messageKey(_ id: String?) -> String {
@@ -232,5 +279,161 @@ actor ConversationTranscriptReader {
             default: return nil
             }
         }.joined(separator: "\n\n")
+    }
+}
+
+extension ConversationStep {
+    static func claude(id: String, name: String, input: [String: Any]) -> ConversationStep {
+        func value(_ key: String) -> String { (input[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+        switch name {
+        case "Bash":
+            // Claude describes each command it runs; the command is the fallback.
+            let description = value("description")
+            return ConversationStep(id: id, kind: .run, title: description.isEmpty ? phrase("Run", command(value("command"))) : description)
+        case "Read": return file(id, .read, "Read", value("file_path"))
+        case "Edit", "MultiEdit": return file(id, .edit, "Edit", value("file_path"))
+        case "Write": return file(id, .edit, "Write", value("file_path"))
+        case "NotebookEdit": return file(id, .edit, "Edit", value("notebook_path"))
+        case "Grep": return ConversationStep(id: id, kind: .search, title: phrase("Search for", value("pattern")))
+        case "Glob": return ConversationStep(id: id, kind: .search, title: phrase("Find", value("pattern")))
+        case "WebSearch": return ConversationStep(id: id, kind: .web, title: phrase("Search the web for", value("query")))
+        case "WebFetch": return ConversationStep(id: id, kind: .web, title: phrase("Open", host(value("url"))))
+        case "Agent", "Task": return ConversationStep(id: id, kind: .other, title: value("description").isEmpty ? "Run an agent" : value("description"))
+        case "Skill": return skill(id, value("skill"))
+        case "AskUserQuestion": return ConversationStep(id: id, kind: .other, title: "Ask a question")
+        default: return ConversationStep(id: id, kind: .other, title: tool(name))
+        }
+    }
+
+    static func codex(_ item: [String: Any]) -> [ConversationStep] {
+        guard let id = item["id"] as? String else { return [] }
+        func value(_ object: [String: Any]?, _ key: String) -> String { object?[key] as? String ?? "" }
+        switch item["type"] as? String {
+        case "CommandExecution":
+            // Codex names a command's parts only when it understood every one.
+            let parts = item["parsed_cmd"] as? [[String: Any]] ?? []
+            if !parts.isEmpty, parts.allSatisfy({ ["read", "search", "list_files"].contains(value($0, "type")) }) {
+                return parts.enumerated().map { index, part in
+                    let partID = parts.count == 1 ? id : "\(id):\(index)"
+                    let path = value(part, "path")
+                    switch value(part, "type") {
+                    case "read": return file(partID, .read, "Read", path.isEmpty ? value(part, "name") : path)
+                    case "search":
+                        let query = value(part, "query")
+                        return ConversationStep(id: partID, kind: .search, title: query.isEmpty ? phrase("Search", fileName(path)) : "Search for " + query)
+                    default: return ConversationStep(id: partID, kind: .search, title: path.isEmpty ? "List files" : "List files in " + fileName(path))
+                    }
+                }
+            }
+            let script = (item["command"] as? [String])?.last ?? value(item, "command")
+            return [ConversationStep(id: id, kind: .run, title: phrase("Run", command(script)))]
+        case "FileChange":
+            let changes = item["changes"] as? [String: [String: Any]] ?? [:]
+            return changes.keys.sorted().map { path in
+                let verb = ["add": "Create", "delete": "Delete"][value(changes[path], "type")] ?? "Edit"
+                return file(id + ":" + path, .edit, verb, path)
+            }
+        case "ImageView":
+            return [file(id, .read, "View", value(item, "path"))]
+        case "Extension":
+            // Waiting on a timer is not a step.
+            switch value(item, "kind") {
+            case "web.search":
+                let action = item["action"] as? [String: Any]
+                if ["openPage", "findInPage"].contains(value(action, "type")) {
+                    return [ConversationStep(id: id, kind: .web, title: phrase("Open", host(value(action, "url"))))]
+                }
+                return [ConversationStep(id: id, kind: .web, title: phrase("Search the web for", value(item, "query")))]
+            case "image_gen.generation": return [ConversationStep(id: id, kind: .other, title: "Generate an image")]
+            default: return []
+            }
+        case "McpToolCall":
+            return [ConversationStep(id: id, kind: .other, title: tool("mcp__\(value(item, "server"))__\(value(item, "tool"))"))]
+        default: return []
+        }
+    }
+
+    static func hermes(id: String, name: String, arguments: [String: Any]) -> ConversationStep {
+        func value(_ key: String) -> String { (arguments[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+        switch name {
+        case "terminal": return ConversationStep(id: id, kind: .run, title: phrase("Run", command(value("command"))))
+        case "read_file": return file(id, .read, "Read", value("path"))
+        case "write_file": return file(id, .edit, "Write", value("path"))
+        case "patch": return file(id, .edit, "Edit", value("path"))
+        case "search_files": return ConversationStep(id: id, kind: .search, title: phrase("Search for", value("pattern")))
+        case "session_search": return ConversationStep(id: id, kind: .search, title: phrase("Search past sessions for", value("query")))
+        case "web_search": return ConversationStep(id: id, kind: .web, title: phrase("Search the web for", value("query")))
+        case "web_extract":
+            let url = (arguments["urls"] as? [String])?.first ?? ""
+            return ConversationStep(id: id, kind: .web, title: phrase("Open", host(url)))
+        case "skill_view": return skill(id, value("name"))
+        case "clarify": return ConversationStep(id: id, kind: .other, title: "Ask a question")
+        case "memory": return ConversationStep(id: id, kind: .other, title: "Update memory")
+        default: return ConversationStep(id: id, kind: .other, title: tool(name))
+        }
+    }
+
+    /// "Read 3 files, edited 2 files and ran 9 commands". A file counts once
+    /// however often it was read or edited.
+    static func summary(_ steps: [ConversationStep]) -> String {
+        var touched: [Kind: Set<String>] = [:]
+        for step in steps { touched[step.kind, default: []].insert(step.file ?? step.id) }
+        func count(_ kind: Kind) -> Int { touched[kind]?.count ?? 0 }
+        func files(_ count: Int) -> String { count == 1 ? "1 file" : "\(count) files" }
+        func times(_ count: Int) -> String { count == 1 ? "once" : "\(count) times" }
+        var parts: [String] = []
+        if count(.read) > 0 { parts.append("read " + files(count(.read))) }
+        if count(.search) > 0 { parts.append("searched " + times(count(.search))) }
+        if count(.edit) > 0 { parts.append("edited " + files(count(.edit))) }
+        if count(.run) > 0 { parts.append(count(.run) == 1 ? "ran 1 command" : "ran \(count(.run)) commands") }
+        if count(.web) > 0 { parts.append("used the web " + times(count(.web))) }
+        if count(.other) > 0 {
+            let noun = parts.isEmpty ? "tool" : "other tool"
+            parts.append("used \(count(.other)) \(noun)\(count(.other) == 1 ? "" : "s")")
+        }
+        guard let last = parts.popLast() else { return "" }
+        let sentence = parts.isEmpty ? last : parts.joined(separator: ", ") + " and " + last
+        return sentence.prefix(1).uppercased() + sentence.dropFirst()
+    }
+
+    private static func file(_ id: String, _ kind: Kind, _ verb: String, _ path: String) -> ConversationStep {
+        ConversationStep(id: id, kind: kind, title: phrase(verb, fileName(path)), file: path.isEmpty ? nil : path)
+    }
+
+    private static func skill(_ id: String, _ name: String) -> ConversationStep {
+        ConversationStep(id: id, kind: .other, title: name.isEmpty ? "Use a skill" : "Use the \(name) skill")
+    }
+
+    private static func phrase(_ verb: String, _ object: String) -> String {
+        object.isEmpty ? verb : verb + " " + object
+    }
+
+    private static func fileName(_ path: String) -> String {
+        let path = path.hasPrefix("file://") ? URL(string: path)?.path ?? path : path
+        return (path as NSString).lastPathComponent
+    }
+
+    private static func host(_ url: String) -> String {
+        URL(string: url)?.host ?? url
+    }
+
+    /// The first line of a command, without the `cd` into the project that
+    /// agents often put in front of it.
+    private static func command(_ script: String) -> String {
+        var line = script.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        if let prefix = line.range(of: #"^\s*cd\s+("[^"]*"|'[^']*'|\S+)\s*(&&|;)\s*"#, options: .regularExpression) {
+            line.removeSubrange(prefix)
+        }
+        return String(line.trimmingCharacters(in: .whitespaces).prefix(160))
+    }
+
+    /// `mcp__claude_ai_Gmail__search_threads` reads as "Gmail: search threads".
+    private static func tool(_ name: String) -> String {
+        let parts = name.components(separatedBy: "__")
+        guard parts.count >= 3, parts[0] == "mcp" else {
+            return name.prefix(1).uppercased() + name.dropFirst().replacingOccurrences(of: "_", with: " ")
+        }
+        let server = parts[1].hasPrefix("claude_ai_") ? String(parts[1].dropFirst(10)) : parts[1]
+        return server.replacingOccurrences(of: "_", with: " ") + ": " + parts[2...].joined(separator: " ").replacingOccurrences(of: "_", with: " ")
     }
 }
