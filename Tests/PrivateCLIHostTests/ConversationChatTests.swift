@@ -306,5 +306,121 @@ final class ConversationChatTests: XCTestCase {
         }
     }
 
+    func testListsQuotesAndHeadingsHangFromTheirMarkers() throws {
+        let attributed = ChatMessageFormatting.attributedText("""
+            ## Plan ##
+            - A first item long enough to wrap onto a second line
+              - A nested item
+              continuing the nested item
+            - [x] Done
+            1. Numbered **bold** step
+            10. Tenth step
+            > Quoted line
+            Plain paragraph
+            """)
+        let string = attributed.string as NSString
+        XCTAssertEqual(attributed.string.components(separatedBy: "\n"), [
+            "Plan", "•\tA first item long enough to wrap onto a second line", "◦\tA nested item",
+            "continuing the nested item", "☑\tDone", "1.\tNumbered bold step", "10.\tTenth step",
+            "Quoted line", "Plain paragraph"
+        ])
+        func style(_ text: String) throws -> NSParagraphStyle {
+            try XCTUnwrap(attributed.attribute(.paragraphStyle, at: string.range(of: text).location, effectiveRange: nil) as? NSParagraphStyle)
+        }
+        let first = try style("A first"), nested = try style("A nested"), step = try style("Numbered")
+        XCTAssertEqual(first.firstLineHeadIndent, 0)
+        XCTAssertEqual(first.tabStops.first?.location, first.headIndent, "Wrapped lines start under the item's text")
+        XCTAssertEqual(nested.firstLineHeadIndent, first.headIndent)
+        XCTAssertGreaterThan(nested.headIndent, nested.firstLineHeadIndent)
+        XCTAssertEqual(try style("continuing").firstLineHeadIndent, nested.headIndent)
+        XCTAssertEqual(step.firstLineHeadIndent, 0)
+        XCTAssertEqual(try style("Tenth").headIndent, step.headIndent, "Numbers of any width share one text column")
+        XCTAssertEqual(try style("Plain").headIndent, 0)
+        XCTAssertGreaterThan(try style("Quoted").headIndent, 0)
+        XCTAssertNotNil(attributed.attribute(ChatMessageFormatting.quoteKey, at: string.range(of: "Quoted").location, effectiveRange: nil))
+        XCTAssertNil(attributed.attribute(ChatMessageFormatting.quoteKey, at: string.range(of: "Plain").location, effectiveRange: nil))
+        let heading = try XCTUnwrap(attributed.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertGreaterThan(heading.pointSize, 14)
+        XCTAssertTrue(heading.fontDescriptor.symbolicTraits.contains(.bold))
+        let bold = try XCTUnwrap(attributed.attribute(.font, at: string.range(of: "bold").location, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(bold.fontDescriptor.symbolicTraits.contains(.bold))
+        XCTAssertEqual(ChatMessageFormatting.attributedText("- typed by you", markdown: false).string, "- typed by you")
+        XCTAssertEqual(ChatMessageFormatting.attributedText("- echo", code: true).string, "- echo")
+    }
+
+    func testRepliesSplitIntoTextCodeTablesAndRules() {
+        let blocks = ChatMessageBody.blocks("""
+            Intro with a | pipe
+            | Name | Status |
+            |:-----|-------:|
+            | Hermes \\| Nous | **ready** |
+            | Codex |
+            ---
+            ```sh
+            | not | a table |
+            |---|---|
+            ```
+            A closing line
+            """)
+        XCTAssertEqual(blocks, [
+            .text("Intro with a | pipe"),
+            .table(ChatTable(header: ["Name", "Status"], alignments: [.leading, .trailing],
+                             rows: [["Hermes | Nous", "**ready**"], ["Codex", ""]])),
+            .rule,
+            .code("| not | a table |\n|---|---|"),
+            .text("A closing line")
+        ])
+    }
+
+    func testTableColumnsKeepNarrowColumnsWholeAndShareTheRest() {
+        XCTAssertEqual(ChatTableLayout.columnWidths(ideal: [60, 300, 500], available: 1000), [60, 300, 500])
+        XCTAssertEqual(ChatTableLayout.columnWidths(ideal: [60, 300, 500], available: 460), [60, 200, 200])
+        XCTAssertEqual(ChatTableLayout.columnWidths(ideal: [100, 100], available: 100), [50, 50])
+    }
+
+    func testFormattedReplyFitsTheColumnAtFullAndSplitWidths() throws {
+        let reply = """
+            Three things changed:
+
+            - **Lists** hang from their markers, so a long item that wraps onto another line stays clear of the bullet.
+              - Nested items step in under their parent.
+            1. Numbered steps share one text column.
+            2. Even when a step runs long enough to wrap at the narrow width of a split pane.
+
+            > A quote keeps a rule at its left edge, down every line it wraps to.
+
+            | Provider | Reads | Notes |
+            |---|:---:|---|
+            | Claude | JSONL | One row per message, written as the reply arrives, with tool rows skipped |
+            | Hermes | SQLite | Follows a compressed conversation into its continuation |
+
+            ---
+            That is the whole reply.
+            """
+        for width in [800, 440] {
+            let view = NSHostingView(rootView: ChatTurn(speaker: "claude", text: reply).padding(24)
+                .frame(width: CGFloat(width)).background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink))
+            view.frame = NSRect(origin: .zero, size: view.fittingSize)
+            view.layoutSubtreeIfNeeded()
+            let table = try XCTUnwrap(ChatMessageBody.blocks(reply).compactMap { block -> ChatTable? in
+                if case .table(let table) = block { return table } else { return nil }
+            }.first)
+            let tableSize = NSHostingController(rootView: ChatTableView(table: table)).sizeThatFits(in: CGSize(width: width - 48, height: 10_000))
+            XCTAssertLessThanOrEqual(tableSize.width, CGFloat(width - 48), "The table wraps inside the column")
+            for textView in descendants(view).compactMap({ $0 as? ChatLinkTextView }) {
+                let frame = textView.convert(textView.bounds, to: view)
+                XCTAssertLessThanOrEqual(frame.maxX, CGFloat(width) - 23)
+                XCTAssertGreaterThan(frame.height, 15)
+            }
+            if let output = ProcessInfo.processInfo.environment["M4IX_UI_PREVIEW_DIR"] {
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let directory = URL(fileURLWithPath: output)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent("formatted-reply-\(width).png"))
+            }
+        }
+    }
+
     private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
 }

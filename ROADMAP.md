@@ -2,6 +2,25 @@
 
 m4ix.CLI should be a reliable macOS workspace for using Claude and Codex together on real software projects. Success requires runtime evidence as well as passing unit tests.
 
+## Formatted replies in chat for 0.18.2
+
+Replies show their Markdown structure. Bullets and numbers become hanging
+indents, nested items step in under their parent, quotes carry a rule at the
+left, and headings are set larger. Lists, quotes and headings stay inside the
+reply's text view, so a selection still crosses them. Tables and dividers are
+blocks of their own: a table keeps its columns' natural widths when it fits,
+and otherwise its narrow columns stay whole while the wide ones share the
+rest.
+
+In the two weeks to 2026-10-12, half of Claude's longer replies contained a
+bulleted list and a fifth a numbered one, all shown as raw text before.
+
+On 2026-10-12 a reply using every construct was rendered at 800 and 440
+points, and a real ten-item reply in dark and light appearance. The full
+suite ran 137 tests: four opt-in skips, the known scrollbar pixel failure,
+and one intermittent failure in the queued-question draft test, where an
+extra character reached the draft; it passed on two of three reruns.
+
 ## Who wrote what in chat for 0.18.1
 
 The chat view and Shared chat separate the speakers. Your messages sit in

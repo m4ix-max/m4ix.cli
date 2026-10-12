@@ -1,3 +1,11 @@
+# m4ix.CLI 0.18.2
+
+Replies in chat show their formatting. Lists hang from their bullets and
+numbers, so a long item wraps clear of its marker, and numbered steps share
+one column. Quotes carry a rule at the left, headings stand out, dividers
+become rules, and tables are set in columns that wrap in a narrow pane.
+Selecting text still runs across a reply's paragraphs and lists.
+
 # m4ix.CLI 0.18.1
 
 The chat view shows who wrote what. Your messages sit in blocks at the right,
