@@ -99,6 +99,22 @@ final class HostModelTests: XCTestCase {
         XCTAssertEqual(model.liveSessionsForCurrentProject().map(\.pendingResumeID), ids)
     }
 
+    func testTheTerminalInPlaceOfChatIsRememberedAcrossLaunches() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("terminal-choice-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "m4ix.cli.terminal-choice." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(root.path, forKey: "PrivateCLIHostWorkingDirectory")
+        let model = HostModel(defaults: defaults, profileBase: root.appendingPathComponent("data"))
+        XCTAssertFalse(model.showsTerminal, "Chat comes first until the terminal is chosen")
+        model.showsTerminal = true
+        XCTAssertTrue(HostModel(defaults: defaults, profileBase: root.appendingPathComponent("data")).showsTerminal)
+        model.showsTerminal = false
+        XCTAssertFalse(HostModel(defaults: defaults, profileBase: root.appendingPathComponent("data")).showsTerminal)
+    }
+
     func testAShellBelowAProcessIsFoundButNotTheProcessItself() throws {
         func shell(_ script: String) throws -> Process {
             let process = Process()

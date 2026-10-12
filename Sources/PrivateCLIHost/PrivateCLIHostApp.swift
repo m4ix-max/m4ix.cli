@@ -927,6 +927,13 @@ final class HostModel: ObservableObject {
             sessionRevision += 1
         }
     }
+    /// The terminal in place of chat, kept across launches as side by side is.
+    @Published var showsTerminal = false {
+        didSet {
+            guard showsTerminal != oldValue else { return }
+            preferences.set(showsTerminal, forKey: Self.terminalPreferenceKey)
+        }
+    }
     @Published private(set) var modelChoices: [Agent: ModelChoice]
     @Published private(set) var modelCatalogs: [Agent: ModelCatalog] = [:]
     @Published private(set) var workingDirectory: URL
@@ -979,6 +986,7 @@ final class HostModel: ObservableObject {
 
     private static let agentPreferenceKey = "PrivateCLIHostSelectedAgent"
     private static let splitPreferenceKey = "PrivateCLIHostSplitView"
+    private static let terminalPreferenceKey = "PrivateCLIHostShowsTerminal"
     private static let directoryPreferenceKey = "PrivateCLIHostWorkingDirectory"
     private static let projectsPreferenceKey = "PrivateCLIHostProjects"
     private static let hiddenProjectsPreferenceKey = "PrivateCLIHostHiddenProjects"
@@ -1007,6 +1015,7 @@ final class HostModel: ObservableObject {
         self.sessionLimit = max(1, min(16, defaults.object(forKey: "PrivateCLIHostSessionLimit") as? Int ?? 4))
         self.selected = defaults.string(forKey: Self.agentPreferenceKey).flatMap(Agent.init(rawValue:)) ?? .claude
         self.isSplit = defaults.bool(forKey: Self.splitPreferenceKey)
+        self.showsTerminal = defaults.bool(forKey: Self.terminalPreferenceKey)
         self.modelChoices = Dictionary(uniqueKeysWithValues: Agent.allCases.map { agent in
             (agent, ModelChoice(preference: defaults.object(forKey: Self.modelPreferenceKey(agent))))
         })
@@ -2693,7 +2702,10 @@ struct HostView: View {
     @State private var pendingStopSession: TerminalSession?
     @State private var taskDrafts: [String: String] = [:]
     @State private var imageDrafts: [String: [PromptImage]] = [:]
-    @State private var showCLIInput = false
+    private var showCLIInput: Bool {
+        get { model.showsTerminal }
+        nonmutating set { model.showsTerminal = newValue }
+    }
     /// One counter per provider, so a request moves the keyboard into that
     /// provider's composer and no other.
     @State private var promptFocusRequests: [Agent: Int] = [:]
@@ -2778,7 +2790,7 @@ struct HostView: View {
                     onProjectTools: { projectToolsRequest = ProjectToolsRequest(directory: model.workingDirectory) },
                     onProductionTools: { showingProductionTools = true },
                     onSharedChat: { dictation.finish(); showingSharedChat = true },
-                    showCLIInput: $showCLIInput,
+                    showCLIInput: $model.showsTerminal,
                     onTerminal: { focusTerminal() }
                 )
                 if !model.showsSideBySide, !model.currentSession.compatibility.usesComposer {

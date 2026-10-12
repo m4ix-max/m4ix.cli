@@ -1,3 +1,13 @@
+# m4ix.CLI 0.18.8
+
+Choosing the terminal in place of chat is remembered when the app opens
+again.
+
+# m4ix.CLI 0.18.7
+
+The chat shows the release in its lower right corner, as the terminal does,
+so the version stays in view whichever of the two is showing.
+
 # m4ix.CLI 0.18.6
 
 Chat is calmer to read. Running text sits a step below full white, while bold

@@ -15,6 +15,7 @@ struct SessionConversationView: View {
     @State private var followsLatest = true
 
     private var conversationID: String? { session.activeConversationID ?? session.pendingResumeID }
+    private static let release = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 
     var needsTerminal: Bool {
         if !session.compatibility.usesComposer || session.terminalResponseRequest != nil { return true }
@@ -86,6 +87,16 @@ struct SessionConversationView: View {
         }
     }
 
+    /// The terminal shows its release in this corner. The chat covers the
+    /// terminal, so it shows its own.
+    private var releaseLabel: some View {
+        Text("(release \(Self.release))")
+            .font(.system(size: 9))
+            .foregroundStyle(Color(nsColor: NSColor(white: 0.42, alpha: 1)))
+            .padding(.trailing, 24).padding(.bottom, 2)
+            .allowsHitTesting(false)
+    }
+
     private var chat: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -153,6 +164,7 @@ struct SessionConversationView: View {
                         .padding(16)
                 }
             }
+            .overlay(alignment: .bottomTrailing) { releaseLabel }
         }.background(ElevateTheme.paper).foregroundStyle(ElevateTheme.ink)
     }
 }

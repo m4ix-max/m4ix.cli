@@ -2,6 +2,17 @@
 
 m4ix.CLI should be a reliable macOS workspace for using Claude and Codex together on real software projects. Success requires runtime evidence as well as passing unit tests.
 
+## The release in view in chat for 0.18.7 and 0.18.8
+
+The release label lives in the terminal view, which the chat covers. "Show
+terminal instead of chat" is not kept across launches, so after the restart
+to 0.18.6 the window opened in chat and the version seemed gone. The chat now
+shows the same label in the same corner. From 0.18.8 the choice of terminal
+or chat is kept in preferences beside side by side, so the app opens as it
+was left. Switching provider and ⌘L still return to chat, and that choice is
+kept too. The full suite ran 145 tests: four opt-in skips and the known
+scrollbar pixel failure.
+
 ## Calmer chat text and provider colours for 0.18.6
 
 Sir found the chat too white to read. Running text was ink, #EBEAEA on
