@@ -90,24 +90,43 @@ enum HostHealth {
     private static let watchdogQueue = DispatchQueue(label: "m4ix.cli.watchdog", qos: .utility)
     private static var watchdogTimer: DispatchSourceTimer?
     private static var pingSentAt: Date?
+    private static var stallStack: (lines: [String], sampled: Date)?
 
     /// Pings the main thread every second. A reply later than two seconds is
-    /// logged with its length once the main thread recovers.
+    /// logged with its length once the main thread recovers, and with where
+    /// the main thread was, sampled once while it still had not answered.
+    @MainActor
     static func startMainThreadWatchdog() {
+        let mainThread = pthread_mach_thread_np(pthread_self())
         watchdogQueue.async {
             guard watchdogTimer == nil else { return }
             let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
             timer.schedule(deadline: .now() + 1, repeating: 1)
             timer.setEventHandler {
-                guard pingSentAt == nil else { return }
+                if let sent = pingSentAt {
+                    if stallStack == nil, Date().timeIntervalSince(sent) >= 1.5 {
+                        let addresses = ThreadStack.returnAddresses(of: mainThread)
+                        let sampled = Date()
+                        stallStack = (ThreadStack.describe(addresses), sampled)
+                    }
+                    return
+                }
                 let sent = Date()
                 pingSentAt = sent
                 DispatchQueue.main.async {
-                    let stall = Date().timeIntervalSince(sent)
-                    watchdogQueue.async { pingSentAt = nil }
-                    guard stall > 2 else { return }
-                    MainActor.assumeIsolated {
-                        HostDiagnostics.record("main_thread_stall", details: ["seconds": Int(stall.rounded())])
+                    let answered = Date()
+                    let stall = answered.timeIntervalSince(sent)
+                    watchdogQueue.async {
+                        // A sample taken after the reply shows the main thread back at work.
+                        let stack = stallStack.flatMap { $0.sampled < answered ? $0.lines : nil }
+                        pingSentAt = nil
+                        stallStack = nil
+                        guard stall > 2 else { return }
+                        DispatchQueue.main.async {
+                            var details: [String: Any] = ["seconds": Int(stall.rounded())]
+                            if let stack, !stack.isEmpty { details["stack"] = stack }
+                            MainActor.assumeIsolated { HostDiagnostics.record("main_thread_stall", details: details) }
+                        }
                     }
                 }
             }
@@ -156,5 +175,82 @@ enum HostHealth {
         var children = [pid_t](repeating: 0, count: Int(count) + 32)
         let filled = proc_listchildpids(pid, &children, Int32(children.count * MemoryLayout<pid_t>.size))
         return filled > 0 ? children.prefix(Int(filled)).filter { $0 > 0 } : []
+    }
+}
+
+/// Where a thread is, read from its frame pointers while it is suspended.
+/// Until it resumes, nothing may allocate or take a lock it could be holding,
+/// so the walk fills memory reserved beforehand and symbols come after.
+enum ThreadStack {
+    static func returnAddresses(of thread: thread_act_t, limit: Int = 32) -> [UInt] {
+        #if arch(arm64)
+        let frames = UnsafeMutablePointer<UInt>.allocate(capacity: limit)
+        defer { frames.deallocate() }
+        var count = 0
+        guard thread_suspend(thread) == KERN_SUCCESS else { return [] }
+        var state = arm_thread_state64_t()
+        var stateCount = mach_msg_type_number_t(MemoryLayout<arm_thread_state64_t>.size / MemoryLayout<natural_t>.size)
+        let status = withUnsafeMutablePointer(to: &state) {
+            $0.withMemoryRebound(to: natural_t.self, capacity: Int(stateCount)) {
+                thread_get_state(thread, thread_state_flavor_t(ARM_THREAD_STATE64), $0, &stateCount)
+            }
+        }
+        if status == KERN_SUCCESS {
+            // A leaf function has not stored its caller yet; the link register holds it.
+            frames[0] = UInt(state.__pc)
+            frames[1] = UInt(state.__lr)
+            count = 2
+            var frame = UInt(state.__fp)
+            while count < limit, frame != 0, frame & 0x7 == 0 {
+                var record: (caller: UInt, returnAddress: UInt) = (0, 0)
+                var copied: vm_size_t = 0
+                let read = withUnsafeMutableBytes(of: &record) {
+                    vm_read_overwrite(mach_task_self_, vm_address_t(frame), vm_size_t(16),
+                                      vm_address_t(UInt(bitPattern: $0.baseAddress)), &copied)
+                }
+                guard read == KERN_SUCCESS, copied == 16, record.returnAddress != 0 else { break }
+                frames[count] = record.returnAddress
+                count += 1
+                guard record.caller > frame else { break }
+                frame = record.caller
+            }
+        }
+        thread_resume(thread)
+        // System code signs its return addresses in the high bits.
+        return (0..<count).map { frames[$0] & 0x0000_7FFF_FFFF_FFFF }
+        #else
+        return []
+        #endif
+    }
+
+    /// One line per frame: the image, the offset `atos -l 0` takes, and the
+    /// nearest symbol when the image has one.
+    static func describe(_ addresses: [UInt]) -> [String] {
+        addresses.map { address in
+            var info = Dl_info()
+            guard dladdr(UnsafeRawPointer(bitPattern: address), &info) != 0, let base = info.dli_fbase else {
+                return String(format: "0x%lx", address)
+            }
+            let image = info.dli_fname.map { (String(cString: $0) as NSString).lastPathComponent } ?? "?"
+            var line = image + String(format: " +0x%lx", address - UInt(bitPattern: base))
+            if let name = info.dli_sname, let start = info.dli_saddr {
+                line += " \(readable(name)) + \(address - UInt(bitPattern: start))"
+            }
+            return line
+        }
+    }
+
+    private typealias Demangle = @convention(c) (UnsafePointer<CChar>?, Int, UnsafeMutablePointer<CChar>?,
+                                                 UnsafeMutablePointer<Int>?, UInt32) -> UnsafeMutablePointer<CChar>?
+
+    /// The Swift runtime's own demangler, looked up rather than linked so a
+    /// missing one leaves names as they are.
+    private static let demangle: Demangle? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "swift_demangle")
+        .map { unsafeBitCast($0, to: Demangle.self) }
+
+    private static func readable(_ symbol: UnsafePointer<CChar>) -> String {
+        guard let demangle, let result = demangle(symbol, strlen(symbol), nil, nil, 0) else { return String(cString: symbol) }
+        defer { free(result) }
+        return String(cString: result)
     }
 }

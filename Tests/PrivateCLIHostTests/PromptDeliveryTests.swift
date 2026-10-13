@@ -102,6 +102,21 @@ final class PromptDeliveryTests: XCTestCase {
         XCTAssertEqual(model.production.drafts.first { $0.id == session.id }?.deliveryUnconfirmed, true)
     }
 
+    func testShellCommandSubmitsAtClaudesShellPrompt() async throws {
+        _ = NSApplication.shared
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try makeModel(root: root, selected: .claude)
+        defer { model.stopAllSessions() }
+        XCTAssertTrue(model.submitPrompt("first task", images: []))
+        let session = model.currentSession
+        try await waitUntil { model.updateAttention(); return prompts(root, .claude) == ["first task"] }
+        try await waitUntil { session.refreshPromptReadiness(); return session.acceptsPromptText && !session.isSendingPrompt }
+        XCTAssertTrue(model.submitPrompt("! git status", images: []))
+        try await waitUntil { prompts(root, .claude) == ["first task", "! git status"] }
+        XCTAssertNil(session.promptRecovery)
+    }
+
     private func makeModel(root: URL, selected: Agent, split: Bool = false) throws -> HostModel {
         let suite = "m4ix.cli.delivery." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -179,6 +194,7 @@ final class PromptDeliveryTests: XCTestCase {
         screen()
         capture = os.path.join(os.environ['HOST_TEST_PROMPTS'], 'claude' if claude else 'codex')
         content = bytearray()
+        shell = False
         while True:
             data = os.read(0, 1)
             if not data: break
@@ -187,9 +203,14 @@ final class PromptDeliveryTests: XCTestCase {
                 with open(capture, 'a') as f:
                     f.write(json.dumps({'prompt': prompt}) + '\n')
                 content.clear()
+                shell = False
                 screen()
             else:
                 content.extend(data)
+                # Like Claude, a leading ! redraws the input for shell mode.
+                if claude and not shell and bytes(content).replace(b'\x1b[200~', b'').startswith(b'!'):
+                    shell = True
+                    os.write(1, ('\x1b[2J\x1b[H' + rule + '\r\n!  \r\n' + rule + '\r\n  ! for shell mode\r\n').encode())
         """#
         try Data(script.utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)

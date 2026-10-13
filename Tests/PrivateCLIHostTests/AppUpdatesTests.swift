@@ -101,6 +101,155 @@ final class AppUpdatesTests: XCTestCase {
         XCTAssertEqual(AppUpdates.revision(of: previous[0].appendingPathComponent("m4ix.CLI.app")), AppRevision(version: "0.16.2", build: "45"))
     }
 
+    func testReadyUpdateIsTheNewestBuildNeedingTheLeastWork() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let running = AppRevision(version: "0.18.9", build: "56")
+        let installed = try application(at: root.appendingPathComponent("Applications/m4ix.CLI.app"), version: "0.18.9", build: "56")
+        func ready(staged: URL? = nil) -> ReadyUpdate? {
+            AppUpdates.readyUpdate(running: running, runningApplication: installed, staged: staged, root: root)
+        }
+        XCTAssertNil(ready())
+
+        let package = try application(at: root.appendingPathComponent("outputs/m4ix.CLI 0.18.10.app"), version: "0.18.10", build: "57")
+        try offer(package.path + "\n", root: root)
+        XCTAssertEqual(ready(), ReadyUpdate(version: "0.18.10", source: .offered(URL(fileURLWithPath: package.path, isDirectory: true))))
+
+        // The same build installed over the running app needs only a restart.
+        try relabel(installed, version: "0.18.10", build: "57")
+        XCTAssertEqual(ready(), ReadyUpdate(version: "0.18.10", source: .installed))
+        let staged = try application(at: stagedPath(root: root), version: "0.18.11", build: "58")
+        XCTAssertEqual(ready(staged: staged), ReadyUpdate(version: "0.18.11", source: .staged(staged)))
+
+        try relabel(installed, version: "0.18.9", build: "56")
+        let older = try application(at: root.appendingPathComponent("older/m4ix.CLI.app"), version: "0.18.8", build: "55")
+        for path in [older.path, root.appendingPathComponent("missing/m4ix.CLI.app").path, "outputs/m4ix.CLI 0.18.10.app", ""] {
+            try offer(path, root: root)
+            XCTAssertNil(ready(), "Offer: \(path)")
+        }
+        XCTAssertNil(AppUpdates.readyUpdate(running: nil, runningApplication: installed, staged: staged, root: root))
+    }
+
+    func testInstallerReopensTheAppAfterAnInstallAndAfterAFailure() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = try application(at: root.appendingPathComponent("Applications/m4ix.CLI.app"), version: "0.18.9", build: "56", sign: true)
+        let opened = root.appendingPathComponent("opened.txt")
+        let opener = root.appendingPathComponent("opener.sh")
+        try Data("#!/bin/sh\nprintf '%s\\n' \"$1\" >> '\(opened.path)'\n".utf8).write(to: opener)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: opener.path)
+        let helper = try XCTUnwrap(AppUpdates.installer)
+        func install(_ staged: URL) throws -> CommandResult {
+            var arguments = try AppUpdates.installerArguments(staged: staged, root: root, target: target, waitingPID: 42, reopen: true)
+            XCTAssertEqual(arguments.last, "reopen")
+            arguments[3] = ""
+            return try CommandRunner.run(executable: "/usr/bin/env", arguments: ["M4IX_UPDATE_OPENER=\(opener.path)", "/bin/bash", helper.path] + arguments,
+                                         directory: root, timeout: 20)
+        }
+        let installed = try install(try application(at: stagedPath(root: root), version: "0.18.10", build: "57", sign: true))
+        XCTAssertEqual(installed.status, 0, installed.output)
+        XCTAssertEqual(AppUpdates.revision(of: target), AppRevision(version: "0.18.10", build: "57"))
+        XCTAssertEqual(try String(contentsOf: opened, encoding: .utf8), target.path + "\n")
+
+        let unsigned = try install(try application(at: stagedPath(root: root), version: "0.18.11", build: "58"))
+        XCTAssertNotEqual(unsigned.status, 0)
+        XCTAssertEqual(AppUpdates.revision(of: target), AppRevision(version: "0.18.10", build: "57"))
+        XCTAssertEqual(try String(contentsOf: opened, encoding: .utf8), target.path + "\n" + target.path + "\n",
+                       "A failed install must still open the app it left in place")
+    }
+
+    @MainActor
+    func testRestartStagesAnOfferedBuildAndReopensThroughTheInstaller() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (model, running) = try restartModel(root: root)
+        defer { model.stopAllSessions() }
+        let package = try application(at: root.appendingPathComponent("outputs/m4ix.CLI 0.18.10.app"), version: "0.18.10", build: "57", sign: true)
+        try offer(package.path, root: root)
+        var quits = 0
+        model.terminateApp = { quits += 1 }
+        await model.refreshReadyUpdate()
+        XCTAssertEqual(model.readyUpdate, ReadyUpdate(version: "0.18.10", source: .offered(URL(fileURLWithPath: package.path, isDirectory: true))))
+
+        await model.restartToUpdate()
+        XCTAssertEqual(quits, 1)
+        XCTAssertTrue(model.reopensAfterQuit)
+        let staged = try XCTUnwrap(model.pendingUpdate)
+        XCTAssertEqual(staged.deletingLastPathComponent().deletingLastPathComponent(),
+                       root.appendingPathComponent("updates/staged"))
+        XCTAssertEqual(AppUpdates.revision(of: staged), AppRevision(version: "0.18.10", build: "57"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("updates/backups").path).count, 1)
+        XCTAssertEqual(AppUpdates.revision(of: running), AppRevision(version: "0.18.9", build: "56"), "Nothing installs before the quit")
+
+        let delegate = PrivateCLIAppDelegate()
+        delegate.model = model
+        var scheduled: (update: URL, reopen: Bool)?
+        // Failing the schedule keeps the test process from quitting.
+        delegate.scheduleUpdate = { update, _, reopen in
+            scheduled = (update, reopen)
+            throw CommandError.failed("Stopped by the test.")
+        }
+        delegate.scheduleReopen = { _ in XCTFail("A staged update reopens through its installer") }
+        XCTAssertEqual(delegate.applicationShouldTerminate(NSApplication.shared), .terminateCancel)
+        XCTAssertEqual(scheduled?.update, staged)
+        XCTAssertEqual(scheduled?.reopen, true)
+        XCTAssertFalse(model.reopensAfterQuit, "A cancelled restart must not reopen after a later quit")
+    }
+
+    @MainActor
+    func testRestartIntoAnInstalledBuildReopensTheSameApp() async throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (model, running) = try restartModel(root: root)
+        defer { model.stopAllSessions() }
+        model.pendingUpdate = try application(at: stagedPath(root: root), version: "0.18.10", build: "57", sign: true)
+        try relabel(running, version: "0.18.10", build: "57")
+        var quits = 0
+        model.terminateApp = { quits += 1 }
+        await model.refreshReadyUpdate()
+        XCTAssertEqual(model.readyUpdate, ReadyUpdate(version: "0.18.10", source: .installed))
+
+        await model.restartToUpdate()
+        XCTAssertEqual(quits, 1)
+        XCTAssertNil(model.pendingUpdate, "The installed copy is as new as the staged one")
+        let delegate = PrivateCLIAppDelegate()
+        delegate.model = model
+        var reopened: URL?
+        delegate.scheduleReopen = { application in
+            reopened = application
+            throw CommandError.failed("Stopped by the test.")
+        }
+        delegate.scheduleUpdate = { _, _, _ in XCTFail("Nothing is left to install") }
+        XCTAssertEqual(delegate.applicationShouldTerminate(NSApplication.shared), .terminateCancel)
+        XCTAssertEqual(reopened, running)
+        XCTAssertEqual(model.operationError, "The app could not be set to open again: Stopped by the test.")
+    }
+
+    @MainActor
+    private func restartModel(root: URL) throws -> (HostModel, URL) {
+        let suite = "m4ix.cli.restart-update." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let running = try application(at: root.appendingPathComponent("Applications/m4ix.CLI.app"), version: "0.18.9", build: "56", sign: true)
+        let model = HostModel(defaults: defaults, profileBase: root)
+        model.runningRevision = AppRevision(version: "0.18.9", build: "56")
+        model.runningApplication = running
+        return (model, running)
+    }
+
+    private func offer(_ path: String, root: URL) throws {
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("updates"), withIntermediateDirectories: true)
+        try Data(path.utf8).write(to: AppUpdates.offerFile(root: root))
+    }
+
+    private func relabel(_ application: URL, version: String, build: String) throws {
+        let plist = application.appendingPathComponent("Contents/Info.plist")
+        var info = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any])
+        info["CFBundleShortVersionString"] = version
+        info["CFBundleVersion"] = build
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: plist)
+    }
+
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("app-update-test-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

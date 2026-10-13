@@ -72,10 +72,13 @@ enum CLIPrompt {
     }
 
     /// Whether Return would submit text typed into the CLI's own input.
-    static func acceptsText(screen: [String], agent: Agent) -> Bool {
+    /// `shellCommand` is set only when the text just typed starts with `!`:
+    /// Claude then draws its input as `! …` in shell mode, and no other text
+    /// may be submitted there, or it would run as a command.
+    static func acceptsText(screen: [String], agent: Agent, shellCommand: Bool = false) -> Bool {
         switch agent {
         case .claude, .hermes:
-            return rawRuledInputAcceptsText(screen: screen, agent: agent)
+            return rawRuledInputAcceptsText(screen: screen, agent: agent, shellCommand: shellCommand)
                 && terminalResponseRequest(screen: screen, agent: agent) == nil
         case .codex:
             return codexAcceptsText(screen: screen)
@@ -94,11 +97,11 @@ enum CLIPrompt {
     /// for an approval, `? ❯` for a question, 🔐 or 🔑 for a password.
     /// Approval choices are numbered inside a panel, `│ ❯ 1. Allow once │`,
     /// where Return would choose for you.
-    private static func rawRuledInputAcceptsText(screen: [String], agent: Agent) -> Bool {
+    private static func rawRuledInputAcceptsText(screen: [String], agent: Agent, shellCommand: Bool = false) -> Bool {
         let options = agent == .hermes ? screen.map(unboxed) : screen
         guard !options.contains(where: isNumberedOption) else { return false }
         if agent == .hermes, hermesPanelChoice(in: screen) != nil { return false }
-        for index in screen.indices where index > 0 && isInputLine(screen[index], agent: agent) {
+        for index in screen.indices where index > 0 && isInputLine(screen[index], agent: agent, shellCommand: shellCommand) {
             guard isRule(screen[index - 1]) else { continue }
             if screen[(index + 1)...].contains(where: isRule) { return true }
         }
@@ -112,9 +115,10 @@ enum CLIPrompt {
     }
 
     /// A non-default Hermes profile names itself before the prompt, `work ❯`.
-    private static func isInputLine(_ line: String, agent: Agent) -> Bool {
+    private static func isInputLine(_ line: String, agent: Agent, shellCommand: Bool = false) -> Bool {
         let text = trimmed(line)
         if text.hasPrefix("❯") { return true }
+        if shellCommand, agent == .claude { return text.hasPrefix("!") }
         return agent == .hermes && text.range(of: #"^[a-z0-9][a-z0-9_-]{0,63} ❯"#, options: .regularExpression) != nil
     }
 

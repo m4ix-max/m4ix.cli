@@ -319,7 +319,7 @@ final class HostedSessionTests: XCTestCase {
         model.pendingUpdate = root.appendingPathComponent("staged/m4ix.CLI.app")
         let delegate = PrivateCLIAppDelegate()
         delegate.model = model
-        delegate.scheduleUpdate = { _, _ in throw CommandError.failed("The update helper is unavailable.") }
+        delegate.scheduleUpdate = { _, _, _ in throw CommandError.failed("The update helper is unavailable.") }
 
         XCTAssertEqual(delegate.applicationShouldTerminate(NSApplication.shared), .terminateCancel)
         XCTAssertEqual(model.operationError, "The update could not be scheduled: The update helper is unavailable.")

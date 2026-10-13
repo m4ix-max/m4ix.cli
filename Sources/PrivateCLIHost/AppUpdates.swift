@@ -33,6 +33,20 @@ struct AppRevision: Comparable {
     }
 }
 
+/// A build newer than the running one that the app can restart into.
+struct ReadyUpdate: Equatable {
+    enum Source: Equatable {
+        /// Installed over the running app, whose old code runs until it opens again.
+        case installed
+        /// Staged by the app, to install once it quits.
+        case staged(URL)
+        /// Packaged by a build, which leaves the app's path in `updates/offered`.
+        case offered(URL)
+    }
+    let version: String
+    let source: Source
+}
+
 enum AppUpdates {
     static let managedFolders = ["projects", "production", "shared-chats"]
 
@@ -99,13 +113,49 @@ enum AppUpdates {
         return version
     }
 
-    static func revision(of application: URL) -> AppRevision? {
+    static func revision(of application: URL) -> AppRevision? { release(of: application)?.revision }
+
+    /// The build a process started from, read from its Info.plist at launch:
+    /// an install replaces the file on disk while the old code keeps running.
+    static func revision(info: [String: Any]?) -> AppRevision? {
+        guard let version = info?["CFBundleShortVersionString"] as? String,
+              let build = info?["CFBundleVersion"] as? String else { return nil }
+        return AppRevision(version: version, build: build)
+    }
+
+    private static func release(of application: URL) -> (version: String, revision: AppRevision)? {
         guard let data = try? Data(contentsOf: application.appendingPathComponent("Contents/Info.plist")),
               let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               info["CFBundleIdentifier"] as? String == "com.maxblomqvist.privateclis",
               let version = info["CFBundleShortVersionString"] as? String,
-              let build = info["CFBundleVersion"] as? String else { return nil }
-        return AppRevision(version: version, build: build)
+              let revision = revision(info: info) else { return nil }
+        return (version, revision)
+    }
+
+    /// Where Packaging/build-and-package.sh leaves the path of each app it builds.
+    static func offerFile(root: URL) -> URL { root.appendingPathComponent("updates/offered") }
+
+    /// The newest build that is newer than the running one. Of two copies of
+    /// the same build, the one needing the least work wins: already
+    /// installed, then staged, then offered. Signatures are checked on staging.
+    static func readyUpdate(running: AppRevision?, runningApplication: URL, staged: URL?, root: URL) -> ReadyUpdate? {
+        guard let running else { return nil }
+        var candidates: [(application: URL, source: ReadyUpdate.Source)] = [(runningApplication, .installed)]
+        if let staged { candidates.append((staged, .staged(staged))) }
+        if let line = try? String(contentsOf: offerFile(root: root), encoding: .utf8) {
+            let path = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if path.hasPrefix("/") {
+                let offered = URL(fileURLWithPath: path, isDirectory: true)
+                candidates.append((offered, .offered(offered)))
+            }
+        }
+        var newest: (revision: AppRevision, update: ReadyUpdate)?
+        for candidate in candidates {
+            guard let release = release(of: candidate.application), release.revision > running,
+                  newest.map({ release.revision > $0.revision }) ?? true else { continue }
+            newest = (release.revision, ReadyUpdate(version: release.version, source: candidate.source))
+        }
+        return newest?.update
     }
 
     static func restorePending(root: URL, preferences: UserDefaults, runningApplication: URL = Bundle.main.bundleURL) -> URL? {
@@ -147,19 +197,20 @@ enum AppUpdates {
             ?? Bundle.module.url(forResource: "app-update", withExtension: "sh", subdirectory: "Resources")
     }
 
-    static func installerArguments(staged: URL, root: URL, target: URL, waitingPID: Int32) throws -> [String] {
+    static func installerArguments(staged: URL, root: URL, target: URL, waitingPID: Int32, reopen: Bool = false) throws -> [String] {
         let target = target.resolvingSymlinksInPath()
         guard target != staged.resolvingSymlinksInPath(),
               !target.path.hasPrefix(root.appendingPathComponent("updates/staged").resolvingSymlinksInPath().path + "/") else {
             throw CommandError.failed("Open the installed app before applying an update.")
         }
         _ = try inspectApplication(target)
-        return [staged.path, target.path, root.path, String(waitingPID)]
+        return [staged.path, target.path, root.path, String(waitingPID)] + (reopen ? ["reopen"] : [])
     }
 
-    static func installAfterExit(_ staged: URL, root: URL) throws {
+    /// `reopen` opens the app again after the install, or after a failed one.
+    static func installAfterExit(_ staged: URL, root: URL, reopen: Bool) throws {
         let arguments = try installerArguments(staged: staged, root: root, target: Bundle.main.bundleURL,
-                                              waitingPID: ProcessInfo.processInfo.processIdentifier)
+                                              waitingPID: ProcessInfo.processInfo.processIdentifier, reopen: reopen)
         guard let source = installer else { throw CommandError.failed("Update helper is missing. Reinstall from the package script.") }
         let helper = root.appendingPathComponent("updates/install-after-exit.sh")
         try Data(contentsOf: source).write(to: helper, options: .atomic)
@@ -173,6 +224,18 @@ enum AppUpdates {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = handle
         process.standardError = handle
+        try process.run()
+    }
+
+    /// Opens the app again once this process has exited.
+    static func reopenAfterExit(_ application: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", #"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open "$2""#,
+                             "reopen", String(ProcessInfo.processInfo.processIdentifier), application.path]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
         try process.run()
     }
 }

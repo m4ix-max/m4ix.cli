@@ -195,6 +195,15 @@ done <<< "$OLD_VERSIONS"
 
 printf 'App: %s\nArchive: %s\n' "$APP_PATH" "$ZIP_PATH"
 
+# The running app offers to restart into this build. Only a Mac where the app
+# has run has its data folder, so CI leaves nothing behind.
+DATA_ROOT="${PRIVATE_CLI_HOST_DATA_DIR:-$HOME/Library/Application Support/Private CLI Host}"
+if [[ -d "$DATA_ROOT" ]]; then
+    mkdir -p "$DATA_ROOT/updates"
+    printf '%s\n' "$APP_PATH" > "$DATA_ROOT/updates/offered"
+    printf 'Offered to the running app: Restart to update\n'
+fi
+
 if [[ "$INSTALL_BUILD" == true ]]; then
     "$SCRIPT_DIR/install.sh" "$APP_PATH"
 else

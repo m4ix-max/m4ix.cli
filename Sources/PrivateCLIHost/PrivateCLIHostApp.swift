@@ -508,8 +508,9 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
             terminal.send(data: CLIPrompt.pasteBytes(body, bracketed: bracketed)[...])
         }
         try? await Task.sleep(nanoseconds: UInt64(CLIPrompt.returnDelay * 1_000_000_000))
-        // A dialog can open in the gap; Return would answer it.
-        guard !Task.isCancelled, screenAcceptsText() else { return false }
+        // A dialog can open in the gap; Return would answer it. A leading
+        // `!` has put Claude in shell mode, which redraws the input line.
+        guard !Task.isCancelled, screenAcceptsText(shellCommand: images.isEmpty && text.hasPrefix("!")) else { return false }
         terminal.send(data: [0x0d][...])
         return true
     }
@@ -540,9 +541,9 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         return false
     }
 
-    private func screenAcceptsText() -> Bool {
+    private func screenAcceptsText(shellCommand: Bool = false) -> Bool {
         guard hostsConversation else { return false }
-        return CLIPrompt.acceptsText(screen: CLIPrompt.liveScreen(of: terminal), agent: agent)
+        return CLIPrompt.acceptsText(screen: CLIPrompt.liveScreen(of: terminal), agent: agent, shellCommand: shellCommand)
     }
 
     func startIfPending() {
@@ -912,8 +913,19 @@ final class HostModel: ObservableObject {
         didSet {
             if let pendingUpdate { preferences.set(pendingUpdate.path, forKey: "PrivateCLIHostPendingUpdate") }
             else { preferences.removeObject(forKey: "PrivateCLIHostPendingUpdate") }
+            Task { await refreshReadyUpdate() }
         }
     }
+    /// A newer build to restart into, offered under the workspace bar.
+    @Published private(set) var readyUpdate: ReadyUpdate?
+    @Published private(set) var isPreparingUpdate = false
+    /// Set by Restart to update: once the app has quit, it opens again.
+    var reopensAfterQuit = false
+    /// The build this process runs, read when it starts.
+    var runningRevision = AppUpdates.revision(info: Bundle.main.infoDictionary)
+    var runningApplication = Bundle.main.bundleURL
+    /// Quits the app. Tests replace it.
+    var terminateApp: () -> Void = { NSApp.terminate(nil) }
     @Published var operationError: String?
     @Published var selected: Agent = .claude {
         didSet { preferences.set(selected.rawValue, forKey: Self.agentPreferenceKey) }
@@ -1225,11 +1237,13 @@ final class HostModel: ObservableObject {
     func startPeriodicWork() {
         guard periodicTimers.isEmpty else { return }
         refreshModelCatalogs()
+        Task { await refreshReadyUpdate() }
         let history = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshHistory()
                 self?.refreshModelCatalogs()
                 self?.saveRestorableSessions()
+                Task { await self?.refreshReadyUpdate() }
             }
         }
         let heartbeat = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -1240,6 +1254,58 @@ final class HostModel: ObservableObject {
         }
         for timer in [history, heartbeat, activity] { RunLoop.main.add(timer, forMode: .common) }
         periodicTimers = [history, heartbeat, activity]
+    }
+
+    // MARK: Updates
+
+    /// Looks for a build newer than the running one. It reads Info.plist
+    /// files only; an offered build's signature is checked when it is staged.
+    func refreshReadyUpdate() async {
+        let running = runningRevision, application = runningApplication, staged = pendingUpdate, root = dataRoot
+        let update = await Task.detached(priority: .utility) {
+            AppUpdates.readyUpdate(running: running, runningApplication: application, staged: staged, root: root)
+        }.value
+        if readyUpdate != update { readyUpdate = update }
+    }
+
+    /// Whether a restart would cut off an agent mid-turn, at a question, or
+    /// while a command it started is still running.
+    var restartInterruptsWork: Bool {
+        sharedChats.values.contains { $0.isRunning } || workspaces.values.contains { workspace in
+            workspace.allSessions.contains { $0.state.isRunning && $0.hostsConversation && !$0.canPause }
+        }
+    }
+
+    /// Quits into the ready update, and the app opens again once it is in
+    /// place. An offered build is backed up and staged first, as Workspace
+    /// tools does.
+    func restartToUpdate() async {
+        guard let update = readyUpdate, !isPreparingUpdate else { return }
+        switch update.source {
+        case .installed:
+            // The copy on disk is at least as new as anything staged.
+            pendingUpdate = nil
+        case .staged:
+            break
+        case .offered(let package):
+            isPreparingUpdate = true
+            defer { isPreparingUpdate = false }
+            let root = dataRoot, preferences = savedPreferences
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development"
+            production.flush(); verification.flush()
+            await flushSharedChats()
+            do {
+                pendingUpdate = try await Task.detached(priority: .userInitiated) {
+                    _ = try AppUpdates.backup(root: root, preferences: preferences, version: version)
+                    return try AppUpdates.stage(package, root: root)
+                }.value
+            } catch {
+                operationError = "The update could not be prepared: \(error.localizedDescription)"
+                return
+            }
+        }
+        reopensAfterQuit = true
+        terminateApp()
     }
 
     // MARK: Attention
@@ -2714,6 +2780,7 @@ struct HostView: View {
     @State private var handoffDraft: HandoffDraft?
     @State private var projectToolsRequest: ProjectToolsRequest?
     @State private var showingProductionTools = false
+    @State private var showingRestartConfirmation = false
     @State private var showingSharedChat = false
     @StateObject private var dictation = Dictation()
 
@@ -2793,6 +2860,16 @@ struct HostView: View {
                     showCLIInput: $model.showsTerminal,
                     onTerminal: { focusTerminal() }
                 )
+                if let update = model.readyUpdate {
+                    HStack {
+                        Text("m4ix.CLI \(update.version) is ready").font(.caption)
+                        Spacer()
+                        Button(model.isPreparingUpdate ? "Preparing…" : "Restart to update") {
+                            if model.restartInterruptsWork { showingRestartConfirmation = true }
+                            else { Task { await model.restartToUpdate() } }
+                        }.disabled(model.isPreparingUpdate)
+                    }.padding(.horizontal, 24).padding(.vertical, 4)
+                }
                 if !model.showsSideBySide, !model.currentSession.compatibility.usesComposer {
                     compatibilityBanner(model.currentSession)
                 }
@@ -2871,6 +2948,12 @@ struct HostView: View {
             }
             Button("OK", role: .cancel) {}
         } message: { Text(dictation.problem?.message ?? "") }
+        .alert("Restart while an agent is working?", isPresented: $showingRestartConfirmation) {
+            Button("Restart") { Task { await model.restartToUpdate() } }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Its current turn, question or command stops. The conversation opens again after the restart.")
+        }
         .alert("Stop this session?", isPresented: $showingStopConfirmation) {
             Button("Stop session", role: .destructive) {
                 if let pendingStopSession { model.stopLiveSession(pendingStopSession) }
@@ -3085,8 +3168,11 @@ struct HostView: View {
 @MainActor
 final class PrivateCLIAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var model: HostModel?
-    /// Starts the helper that installs a staged update once this process exits.
-    var scheduleUpdate: (URL, URL) throws -> Void = AppUpdates.installAfterExit
+    /// Starts the helper that installs a staged update once this process
+    /// exits, and opens the app again when the quit is a restart.
+    var scheduleUpdate: (URL, URL, Bool) throws -> Void = AppUpdates.installAfterExit
+    /// Opens the app again once this process exits.
+    var scheduleReopen: (URL) throws -> Void = AppUpdates.reopenAfterExit
     private var terminationPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -3112,9 +3198,17 @@ final class PrivateCLIAppDelegate: NSObject, NSApplicationDelegate, UNUserNotifi
         // The helper waits for this process to exit, so it starts before any
         // session stops. If it cannot start, every session keeps running.
         if let update = model.pendingUpdate {
-            do { try scheduleUpdate(update, model.dataRoot) }
+            do { try scheduleUpdate(update, model.dataRoot, model.reopensAfterQuit) }
             catch {
+                model.reopensAfterQuit = false
                 model.operationError = "The update could not be scheduled: \(error.localizedDescription)"
+                return .terminateCancel
+            }
+        } else if model.reopensAfterQuit {
+            do { try scheduleReopen(model.runningApplication) }
+            catch {
+                model.reopensAfterQuit = false
+                model.operationError = "The app could not be set to open again: \(error.localizedDescription)"
                 return .terminateCancel
             }
         }

@@ -1,3 +1,19 @@
+# m4ix.CLI 0.18.10
+
+A message to Claude that starts with `!` runs as a shell command, as it does
+in Claude's own input. The message field typed such commands and then
+stopped short of Return, because Claude's input shows `!` in place of its
+prompt sign while it takes one. The chat shows the command and its output
+without Claude's log tags.
+
+When a newer build is ready, a line under the workspace bar offers Restart
+to update. It installs the build if that is still needed, quits, and opens
+the app again; if an agent is working, it asks first. Builds from source
+offer themselves to the running app, so installing one takes no command.
+
+When the window stops responding for more than two seconds, the event log
+records where the app was stuck as well as for how long.
+
 # m4ix.CLI 0.18.9
 
 The scrollbar's position mark is dark again in dark appearance. It had taken

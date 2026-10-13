@@ -1,11 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 umask 077
-[[ $# -ge 3 && $# -le 4 ]] || { printf 'Usage: app-update.sh source.app target.app data-root [waiting-pid]\n' >&2; exit 1; }
+[[ $# -ge 3 && $# -le 5 ]] || { printf 'Usage: app-update.sh source.app target.app data-root [waiting-pid [reopen]]\n' >&2; exit 1; }
 source_app=$1
 target_app=$2
 data_root=$3
 wait_pid=${4:-}
+reopen=${5:-}
+[[ -z "$reopen" || "$reopen" == reopen ]] || exit 1
 [[ "$source_app" == /* && "$target_app" == /* && "$data_root" == /* ]] || exit 1
 source_parent=$(dirname -- "$source_app")
 [[ $(basename -- "$source_app") == m4ix.CLI.app &&
@@ -16,6 +18,14 @@ if [[ -n "$wait_pid" ]]; then
     [[ "$wait_pid" =~ ^[0-9]+$ && "$wait_pid" -gt 1 ]] || exit 1
     while kill -0 "$wait_pid" 2>/dev/null; do sleep 1; done
 fi
+# A restart opens the app again whether or not the install worked, so it is
+# never left closed. Tests replace the opener.
+stage_dir=''
+finish() {
+    if [[ -n "$stage_dir" ]]; then rm -rf "$stage_dir"; fi
+    if [[ "$reopen" == reopen ]]; then "${M4IX_UPDATE_OPENER:-/usr/bin/open}" "$target_app" || true; fi
+}
+trap finish EXIT
 validate_app() {
     [[ -x "$1/Contents/MacOS/PrivateCLIHost" ]] || return 1
     [[ $(/usr/bin/plutil -extract CFBundleIdentifier raw "$1/Contents/Info.plist") == com.maxblomqvist.privateclis ]] || return 1
@@ -24,7 +34,6 @@ validate_app() {
 validate_app "$source_app"
 parent_dir=$(dirname -- "$target_app")
 stage_dir=$(mktemp -d "$parent_dir/.m4ix-update.XXXXXXXX")
-trap 'rm -rf "$stage_dir"' EXIT
 /usr/bin/ditto "$source_app" "$stage_dir/new.app"
 validate_app "$stage_dir/new.app"
 if [[ -e "$target_app" ]]; then

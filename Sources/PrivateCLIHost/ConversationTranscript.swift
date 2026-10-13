@@ -262,7 +262,9 @@ actor ConversationTranscriptReader {
     }
 
     private func visibleText(_ content: Any?, role: String) -> String {
-        if let text = content as? String { return text }
+        if let text = content as? String {
+            return agent == .claude && role == "user" ? Self.claudeShellText(text) ?? text : text
+        }
         guard let blocks = content as? [[String: Any]] else { return "" }
         return blocks.compactMap { block -> String? in
             switch block["type"] as? String {
@@ -279,6 +281,24 @@ actor ConversationTranscriptReader {
             default: return nil
             }
         }.joined(separator: "\n\n")
+    }
+
+    /// Claude logs a `!` command as tagged user text, `<bash-input>`, and its
+    /// result as `<bash-stdout>` and `<bash-stderr>`. Chat shows the command
+    /// as it was typed and the result as plain text; no result, no message.
+    private static func claudeShellText(_ text: String) -> String? {
+        func tagged(_ name: String) -> String? {
+            guard let open = text.range(of: "<\(name)>"),
+                  let close = text.range(of: "</\(name)>", range: open.upperBound..<text.endIndex) else { return nil }
+            return String(text[open.upperBound..<close.lowerBound])
+        }
+        if text.hasPrefix("<bash-input>"), let command = tagged("bash-input") {
+            return "! " + command.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard text.hasPrefix("<bash-stdout>") || text.hasPrefix("<bash-stderr>") else { return nil }
+        return [tagged("bash-stdout"), tagged("bash-stderr")]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.joined(separator: "\n")
     }
 }
 

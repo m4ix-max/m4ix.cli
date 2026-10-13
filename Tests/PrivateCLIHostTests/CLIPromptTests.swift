@@ -88,6 +88,27 @@ final class CLIPromptTests: XCTestCase {
         XCTAssertFalse(CLIPrompt.claudeAcceptsText(screen: []))
     }
 
+    func testClaudeShellModeTakesOnlyAShellCommand() {
+        // Claude Code 2.1.296 after the paste of "! echo probe": shell mode
+        // draws `!` where the prompt glyph was.
+        let shell = [
+            String(repeating: " ", count: 81) + "◉ xhigh   /effort",
+            rule,
+            "!  echo probe",
+            rule,
+            "  ! for shell mode"
+        ]
+        XCTAssertTrue(CLIPrompt.acceptsText(screen: shell, agent: .claude, shellCommand: true))
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: shell, agent: .claude),
+                       "Text that does not start with ! would run as a command here")
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: shell, agent: .hermes, shellCommand: true))
+
+        let idle = [rule, "❯ ", rule, "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"]
+        XCTAssertTrue(CLIPrompt.acceptsText(screen: idle, agent: .claude, shellCommand: true))
+        let approval = [rule, "! rm -r build", rule, " Do you want to proceed?", " ❯ 1. Yes", "   2. No"]
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: approval, agent: .claude, shellCommand: true))
+    }
+
     func testCodexAcceptsTextOnlyAtItsComposer() {
         let composer = [
             "› Reply with only the word ok",

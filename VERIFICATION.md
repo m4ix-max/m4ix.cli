@@ -4,6 +4,49 @@ What each release changed and the evidence it was checked against, newest
 first. Notes for users are in `Packaging/RELEASE-NOTES.md`; requirements and
 the next work are in `ROADMAP.md`.
 
+## Shell commands, freeze locations and Restart to update for 0.18.10
+
+The event log of 9 to 13 October held five interrupted sends, all to Claude.
+Three were followed 8 to 14 seconds later by a `!` command arriving in the
+conversation, and a fourth a minute later. A probe recorded Claude Code
+2.1.296's screen without submitting anything: once a message starts with `!`,
+the input line reads `!  echo probe` between its rules, and the check before
+Return accepted only `❯`. That check now accepts `!` too, but only when the
+message itself starts with `!`. Ordinary text never submits in shell mode,
+where it would run as a command. The recorded screen is a test fixture. A
+fake Claude that redraws for shell mode takes `! git status` from the
+composer; with the old check the same test times out with the text unsent.
+Claude logs these commands as `<bash-input>` and `<bash-stdout>` rows, which
+the chat showed raw; it now shows `! git status` and the output.
+
+The same four days logged 27 freezes of 2 to 15 seconds, each with its length
+and nothing else. The watchdog now samples the main thread once per freeze,
+two seconds after a ping goes unanswered: it suspends the thread, walks its
+frame pointers into memory reserved beforehand, resumes it, and only then
+names the frames with dladdr and the Swift runtime's demangler. A sample
+taken after the main thread replied is dropped, so an idle thread is never
+blamed. Tests check that a sample names the function holding the main thread,
+and that a real 3.5-second freeze is logged with the frozen function.
+
+A newer build is found in three places: installed over the running app, staged
+from Workspace tools, or offered by `build-and-package.sh`, which now writes
+the new app's path to `updates/offered` when the app's data folder exists.
+Of two copies of one build, the one needing least work wins. Restart backs up
+and stages an offered build as Workspace tools does, then quits; the update
+helper reopens the app after installing, and also after a failed install,
+which leaves the previous app in place. Tests cover the choice of build, both
+reopen paths of the helper, and the quit for an offered and an installed
+build. The banner itself has no window test. It first appears once a build
+newer than 0.18.10 exists.
+
+The full suite ran 154 tests with the four opt-in tests skipped and no
+failures, and the launcher checks passed. One full run before committing
+failed the approval test in TerminalInteractionTests, which waits for the
+terminal to take focus, and the terminal takes focus only while its window is
+key. It passed alone three times, in seven of eight runs beside the stall
+tests, and in the next full run. This version has not been packaged or
+installed.
+
 ## Scrollbar marker in dark appearance and keyboard-proof tests for 0.18.9
 
 The crossbar that marks the reading position was filled with ink, which dark

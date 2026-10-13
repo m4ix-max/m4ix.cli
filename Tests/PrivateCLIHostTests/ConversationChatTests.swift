@@ -54,6 +54,28 @@ final class ConversationTranscriptTests: XCTestCase {
         XCTAssertEqual(snapshot.messages.map(\.speaker), ["you", "you", "claude"])
     }
 
+    func testClaudeShellCommandsShowAsTypedWithTheirOutput() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID().uuidString.lowercased()
+        let file = try logFile(root, agent: .claude, id: id)
+        let rows: [[String: Any]] = [
+            claudeMessage("user", content: "<bash-input> git status</bash-input>", id: "u1", session: id),
+            claudeMessage("user", content: "<bash-stdout>On branch main\nnothing to commit\n</bash-stdout><bash-stderr></bash-stderr>",
+                          id: "u2", session: id),
+            claudeMessage("user", content: "<bash-input>true</bash-input>", id: "u3", session: id),
+            claudeMessage("user", content: "<bash-stdout></bash-stdout><bash-stderr></bash-stderr>", id: "u4", session: id),
+            claudeMessage("user", content: "<bash-stdout></bash-stdout><bash-stderr>fatal: not a git repository</bash-stderr>",
+                          id: "u5", session: id),
+            claudeMessage("user", content: "What does <bash-input> mean?", id: "u6", session: id)
+        ]
+        try write(rows, to: file)
+        let snapshot = await ConversationTranscriptReader(agent: .claude, profile: root, conversationID: id).read()
+        XCTAssertEqual(snapshot.messages.map(\.text), ["! git status", "On branch main\nnothing to commit", "! true",
+                                                       "fatal: not a git repository", "What does <bash-input> mean?"])
+        XCTAssertEqual(Set(snapshot.messages.map(\.speaker)), ["you"])
+    }
+
     func testIncrementalReadsWaitForCompleteLinesAndRecoverFromReplacement() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
