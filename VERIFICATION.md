@@ -35,7 +35,8 @@ and no failures, the first clean local run recorded since 0.15.0. Launcher
 checks passed, and the run left the real event log untouched. On 2026-10-13
 the package was built from the committed source: its stamp names c7287e2 with
 no uncommitted changes, its signature verifies and its checksum matches. It
-has not been installed.
+was installed to ~/Applications the same day, with 0.18.8 kept in
+install-backups.
 
 ## The release in view in chat for 0.18.7 and 0.18.8
 
