@@ -44,7 +44,10 @@ failures, and the launcher checks passed. One full run before committing
 failed the approval test in TerminalInteractionTests, which waits for the
 terminal to take focus, and the terminal takes focus only while its window is
 key. It passed alone three times, in seven of eight runs beside the stall
-tests, and in the next full run. This version has not been packaged or
+tests, and in the next full run. On 2026-10-13 the package was built from the
+committed source: its stamp names 32abe18 with no uncommitted changes, its
+signature verifies and its checksum matches. Packaging wrote its path to
+`updates/offered`, which the running 0.18.9 does not read. It has not been
 installed.
 
 ## Scrollbar marker in dark appearance and keyboard-proof tests for 0.18.9
