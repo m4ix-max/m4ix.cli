@@ -31,9 +31,11 @@ a newest current version, an older one, ZIP-only versions, unrelated names,
 and evidence folders.
 
 On 2026-10-12 the full suite ran 145 tests with the four opt-in tests skipped
-and no failures, the first clean local run recorded since 0.15.0. Launcher checks
-passed, and the run left the real event log untouched. This version has not
-been packaged or installed.
+and no failures, the first clean local run recorded since 0.15.0. Launcher
+checks passed, and the run left the real event log untouched. On 2026-10-13
+the package was built from the committed source: its stamp names c7287e2 with
+no uncommitted changes, its signature verifies and its checksum matches. It
+has not been installed.
 
 ## The release in view in chat for 0.18.7 and 0.18.8
 
