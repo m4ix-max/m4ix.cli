@@ -54,9 +54,10 @@ final class TerminalScrollbar: NSControl {
         NSBezierPath(roundedRect: knobRect, xRadius: 4, yRadius: 4).fill()
         if isEnabled {
             // A narrow crossbar marks the viewport's exact position even when
-            // the proportional thumb is almost as tall as the track.
+            // the proportional thumb is almost as tall as the track. It sits on
+            // the thumb, so it keeps ink when dark appearance turns ink pale.
             let markerY = min(bounds.height - 2, max(2, CGFloat(position) * bounds.height))
-            HostTheme.nsInk.setFill()
+            HostTheme.nsOnSignal.setFill()
             NSBezierPath(roundedRect: NSRect(x: 2, y: markerY - 1, width: max(0, bounds.width - 4), height: 2),
                          xRadius: 1, yRadius: 1).fill()
         }

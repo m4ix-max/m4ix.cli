@@ -22,6 +22,8 @@ enum HostTheme {
     static let nsGraphite = adaptive(light: nsColor(0x535050), dark: nsColor(0xAFADAC))
     static let nsAsh = nsColor(0xAFADAC)
     static let nsSignal = nsColor(0xE8FA51)
+    /// Marks drawn on the signal colour stay ink in either appearance.
+    static let nsOnSignal = solidInk
     static let nsViolet = nsColor(0xA082F0)
     /// Running text in chat, a step below ink: about 10:1 against paper
     /// rather than 15:1, so long replies do not glare. Bold and headings
@@ -39,7 +41,7 @@ enum HostTheme {
     static let graphite = Color(nsColor: nsGraphite)
     static let ash = Color(nsColor: nsAsh)
     static let signal = Color(nsColor: nsSignal)
-    static let onSignal = Color(nsColor: solidInk)
+    static let onSignal = Color(nsColor: nsOnSignal)
     static let violet = Color(nsColor: nsViolet)
     static let reading = Color(nsColor: nsReading)
 

@@ -1,3 +1,10 @@
+# m4ix.CLI 0.18.9
+
+The scrollbar's position mark is dark again in dark appearance. It had taken
+the pale text colour and almost disappeared against the lime thumb. Building
+from source keeps the three newest packages in `outputs/` and removes older
+ones.
+
 # m4ix.CLI 0.18.8
 
 Choosing the terminal in place of chat is remembered when the app opens

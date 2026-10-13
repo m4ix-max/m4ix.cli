@@ -66,9 +66,7 @@ final class TerminalInteractionTests: XCTestCase {
             defer { window.orderOut(nil); session.stop() }
             let keyDeadline = Date().addingTimeInterval(3)
             while !window.isKeyWindow, Date() < keyDeadline {
-                while let event = NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true) {
-                    NSApp.sendEvent(event)
-                }
+                NSApp.dispatchQueuedEventsExceptKeyboard()
                 try await Task.sleep(nanoseconds: 20_000_000)
             }
             guard window.isKeyWindow else { throw XCTSkip("WindowServer focus is unavailable in this environment.") }
@@ -173,9 +171,7 @@ final class TerminalInteractionTests: XCTestCase {
             defer { window.orderOut(nil); session.stop() }
             let keyDeadline = Date().addingTimeInterval(3)
             while !window.isKeyWindow, Date() < keyDeadline {
-                while let event = NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true) {
-                    NSApp.sendEvent(event)
-                }
+                NSApp.dispatchQueuedEventsExceptKeyboard()
                 try await Task.sleep(nanoseconds: 20_000_000)
             }
             guard window.isKeyWindow else { throw XCTSkip("WindowServer focus is unavailable in this environment.") }
@@ -345,9 +341,7 @@ final class TerminalInteractionTests: XCTestCase {
     private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         let deadline = Date().addingTimeInterval(5)
         while !condition() {
-            while let event = NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true) {
-                NSApp.sendEvent(event)
-            }
+            NSApp.dispatchQueuedEventsExceptKeyboard()
             guard Date() < deadline else {
                 XCTFail("Window or CLI did not reach the expected state", file: file, line: line)
                 throw CommandError.timedOut

@@ -6,6 +6,7 @@ umask 077
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 OUTPUT_DIR="${M4IX_OUTPUT_DIR:-$PROJECT_DIR/outputs}"
+KEEP_BUILDS="${M4IX_KEEP_BUILDS:-3}"
 APP_NAME='m4ix.CLI'
 source "$SCRIPT_DIR/version.env"
 INSTALL_BUILD=false
@@ -19,6 +20,7 @@ case "${1:-}" in
 esac
 [[ $# -le 1 ]] || { printf 'Too many arguments\n' >&2; exit 1; }
 [[ "$OUTPUT_DIR" == /* ]] || { printf 'M4IX_OUTPUT_DIR must be an absolute path.\n' >&2; exit 1; }
+[[ "$KEEP_BUILDS" =~ ^[1-9][0-9]*$ ]] || { printf 'M4IX_KEEP_BUILDS must be a whole number of at least 1.\n' >&2; exit 1; }
 if [[ "$PRODUCTION_BUILD" == true ]]; then
     [[ "${M4IX_SIGNING_IDENTITY:-}" == 'Developer ID Application: '* ]] || {
         printf 'Production packaging requires M4IX_SIGNING_IDENTITY (Developer ID Application).\n' >&2; exit 1;
@@ -172,6 +174,24 @@ fi
 mv "$STAGED_APP" "$APP_PATH"
 mv "$STAGED_ZIP" "$ZIP_PATH"
 (cd "$OUTPUT_DIR" && shasum -a 256 "$APP_NAME $APP_VERSION.zip" > "$APP_NAME $APP_VERSION.zip.sha256")
+
+# Keep only the newest packages. outputs/ syncs through Dropbox, and every app
+# bundle left in it registers under the installed app's bundle ID.
+OLD_VERSIONS=$(
+    for artifact in "$OUTPUT_DIR/$APP_NAME "*.app "$OUTPUT_DIR/$APP_NAME "*.zip; do
+        version=${artifact#"$OUTPUT_DIR/$APP_NAME "}
+        version=${version%.*}
+        if [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ && "$version" != "$APP_VERSION" ]]; then
+            printf '%s\n' "$version"
+        fi
+    done | sort -u -V -r | tail -n +"$KEEP_BUILDS"
+)
+while IFS= read -r version; do
+    [[ -n "$version" ]] || continue
+    rm -rf "$OUTPUT_DIR/$APP_NAME $version.app"
+    rm -f "$OUTPUT_DIR/$APP_NAME $version.zip" "$OUTPUT_DIR/$APP_NAME $version.zip.sha256"
+    printf 'Removed older package: %s\n' "$version"
+done <<< "$OLD_VERSIONS"
 
 printf 'App: %s\nArchive: %s\n' "$APP_PATH" "$ZIP_PATH"
 

@@ -269,9 +269,7 @@ final class ConversationChatTests: XCTestCase {
         defer { window.orderOut(nil) }
         let keyDeadline = Date().addingTimeInterval(3)
         while !window.isKeyWindow, Date() < keyDeadline {
-            while let event = NSApp.nextEvent(matching: .any, until: .distantPast, inMode: .default, dequeue: true) {
-                NSApp.sendEvent(event)
-            }
+            NSApp.dispatchQueuedEventsExceptKeyboard()
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         window.layoutIfNeeded()

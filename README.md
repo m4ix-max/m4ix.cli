@@ -18,7 +18,7 @@ bash Packaging/build-and-package.sh --install
 
 The source lives in Dropbox. `.build` is a symlink to `~/Library/Caches/m4ix.cli/build`, so SwiftPM's cache of nearly a gigabyte never syncs. On a Mac where that link is missing, recreate it before building: `mkdir -p ~/Library/Caches/m4ix.cli/build && ln -s ~/Library/Caches/m4ix.cli/build .build`.
 
-The script builds `PrivateCLIHost` in release mode and creates versioned app and ZIP artifacts in `outputs/`. With `--install`, it installs the build as `~/Applications/m4ix.CLI.app` and retains the previous app under `~/Library/Caches/m4ix.cli/install-backups/`. Quit the running app and open that exact user Applications copy to load the update. Set `M4IX_INSTALL_DIR=/Applications` when building to choose the system Applications folder instead. The app was called Private CLIs before 0.5.0; the bundle ID and private profiles are unchanged, so logins and history carry over. The bundle is signed locally with an ad hoc signature; it is not notarized for distribution. It includes SwiftTerm's MIT license in `Contents/Resources/Licenses`.
+The script builds `PrivateCLIHost` in release mode and creates versioned app and ZIP artifacts in `outputs/`. It keeps the three newest versions there and removes older ones; set `M4IX_KEEP_BUILDS` to keep more. With `--install`, it installs the build as `~/Applications/m4ix.CLI.app` and retains the previous app under `~/Library/Caches/m4ix.cli/install-backups/`. Quit the running app and open that exact user Applications copy to load the update. Set `M4IX_INSTALL_DIR=/Applications` when building to choose the system Applications folder instead. The app was called Private CLIs before 0.5.0; the bundle ID and private profiles are unchanged, so logins and history carry over. The bundle is signed locally with an ad hoc signature; it is not notarized for distribution. It includes SwiftTerm's MIT license in `Contents/Resources/Licenses`.
 
 ## Use
 
@@ -162,7 +162,7 @@ swift build --disable-sandbox -c release
 
 Test runs keep their data and event log in a temporary folder and never write into the private profiles. The opt-in live tests below use the private profiles' existing logins explicitly.
 
-GitHub Actions runs the Swift and launcher checks, packages a signed app without installing it, and retains the ZIP as a build artifact. Requirements and verification evidence are tracked in ROADMAP.md.
+GitHub Actions runs the Swift and launcher checks, packages a signed app without installing it, and retains the ZIP as a build artifact. Requirements and the next work are in ROADMAP.md; what each release changed and how it was checked is in VERIFICATION.md.
 
 To exercise a packaged build with your authenticated private accounts:
 

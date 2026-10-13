@@ -18,7 +18,7 @@ let package = Package(
             name: "PrivateCLIHost",
             dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
             path: ".",
-            exclude: ["Packaging", "README.md", "ROADMAP.md", "LICENSE", "Tests", "Tools", "outputs", "versions"],
+            exclude: ["Packaging", "README.md", "ROADMAP.md", "VERIFICATION.md", "LICENSE", "Tests", "Tools", "outputs", "versions"],
             sources: ["Sources/PrivateCLIHost"],
             resources: [.copy("Resources/agent-launcher.sh"), .copy("Resources/app-update.sh"), .copy("Resources/Fonts")],
             linkerSettings: [.linkedLibrary("sqlite3")]
