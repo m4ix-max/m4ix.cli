@@ -4,6 +4,26 @@ What each release changed and the evidence it was checked against, newest
 first. Notes for users are in `Packaging/RELEASE-NOTES.md`; requirements and
 the next work are in `ROADMAP.md`.
 
+## Hermes chat colour for 0.18.11
+
+Hermes's name and mark now use violet through the same provider tint as
+Claude and Codex. Dark appearance uses the existing accent, #A082F0; light
+appearance uses #7149B8. Against their chat backgrounds the contrast ratios
+are 6.09:1 and 5.23:1 respectively.
+
+The existing chat preview includes Hermes beside Claude and Codex. Both
+appearances were rendered and inspected in
+`outputs/hermes-colour-0.18.11/chat-colours-{dark,light}.png`. On 2026-10-14
+the full suite ran 154 tests with four opt-in tests skipped and no failures,
+and the launcher checks passed.
+
+Version 0.18.11 (58) was packaged and installed to ~/Applications. Its
+signature and archive checksum verify, and the installed executable matches
+the package. That package was built before the change was committed, so its
+stamp names 0bc1a16 with uncommitted changes. No source file changed between
+the build and the commit on 2026-10-16. Version 0.18.10 is retained in
+install-backups; the running app is offered Restart to update.
+
 ## Shell commands, freeze locations and Restart to update for 0.18.10
 
 The event log of 9 to 13 October held five interrupted sends, all to Claude.

@@ -25,7 +25,7 @@ enum Agent: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .claude: return HostTheme.claude
         case .codex: return HostTheme.codex
-        case .hermes: return HostTheme.ink
+        case .hermes: return HostTheme.hermes
         }
     }
 

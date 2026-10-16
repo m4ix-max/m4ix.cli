@@ -430,6 +430,7 @@ final class ConversationChatTests: XCTestCase {
 
                 The merge should do more than place two cards beside each other. A task list and a calendar should become a planner, with dated tasks appearing on the calendar. I'll build around that.
                 """).padding(.top, 28)
+            ChatTurn(speaker: "hermes", text: "I'll check how the combined components work at narrow widths.").padding(.top, 28)
         }
         .padding(24).frame(maxWidth: HostTheme.readingWidth, alignment: .leading).frame(width: 1000)
         .background(HostTheme.paper).foregroundStyle(HostTheme.ink)

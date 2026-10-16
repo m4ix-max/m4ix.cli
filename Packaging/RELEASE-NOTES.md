@@ -1,3 +1,8 @@
+# m4ix.CLI 0.18.11
+
+Hermes's name and mark are violet in chat, with a deeper shade in light
+appearance to keep the small label readable.
+
 # m4ix.CLI 0.18.10
 
 A message to Claude that starts with `!` runs as a shell command, as it does

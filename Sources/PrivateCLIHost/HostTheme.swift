@@ -45,11 +45,11 @@ enum HostTheme {
     static let violet = Color(nsColor: nsViolet)
     static let reading = Color(nsColor: nsReading)
 
-    /// Each provider's name and mark in chat. Orange and teal stay apart
-    /// for every common colour vision, and teal is not mistaken for a link.
-    /// The light values are deeper so the 12-point name still reads.
+    /// Each provider's name and mark in chat. The light values are deeper
+    /// so the 12-point name still reads on paper.
     static let claude = Color(nsColor: adaptive(light: nsColor(0xB5532F), dark: nsColor(0xD97757)))
     static let codex = Color(nsColor: adaptive(light: nsColor(0x0E7480), dark: nsColor(0x56C2C9)))
+    static let hermes = Color(nsColor: adaptive(light: nsColor(0x7149B8), dark: nsViolet))
 
     /// The semantic hairlines in the source tokens use 8-bit alpha values.
     static let nsBorder = adaptive(
