@@ -107,6 +107,50 @@ final class CLIPromptTests: XCTestCase {
         XCTAssertTrue(CLIPrompt.acceptsText(screen: idle, agent: .claude, shellCommand: true))
         let approval = [rule, "! rm -r build", rule, " Do you want to proceed?", " ❯ 1. Yes", "   2. No"]
         XCTAssertFalse(CLIPrompt.acceptsText(screen: approval, agent: .claude, shellCommand: true))
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: approval, agent: .claude, shellCommand: true, typed: "! rm -r build"))
+    }
+
+    func testClaudeSendsUnderAConversationThatReadsLikeAMenu() {
+        // Claude Code 2.1.329 after the paste of "! git status", recorded
+        // without Return on 2026-11-20: a blank line now sits above the
+        // footer, which is indented and must not pass for the input.
+        let shellBox = [rule, "!  git status", rule, "", "  ! for shell mode"]
+        let idleBox = [rule, "❯ ", rule, "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"]
+        let conversations = [
+            ["❯ 1. Run the tests", "⏺ Done.", ""],
+            ["⏺ The choices were:", "> 2) keep the cache", ""],
+            ["❯ continue", "yes, carrying on", ""]
+        ]
+        for conversation in conversations {
+            XCTAssertTrue(CLIPrompt.acceptsText(screen: conversation + shellBox, agent: .claude, shellCommand: true,
+                                                typed: "! git status"), "\(conversation)")
+            XCTAssertTrue(CLIPrompt.claudeAcceptsText(screen: conversation + idleBox), "\(conversation)")
+            XCTAssertNil(CLIPrompt.terminalResponseRequest(screen: conversation + idleBox, agent: .claude), "\(conversation)")
+        }
+    }
+
+    func testTypedTextThatStartsWithANumberIsNotAMenu() {
+        let typed = [rule, "❯ 1. Run the tests", rule, "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents"]
+        XCTAssertTrue(CLIPrompt.acceptsText(screen: typed, agent: .claude, typed: "1. Run the tests\n2. Commit"))
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: typed, agent: .claude), "Before typing, the line is a menu")
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: typed, agent: .claude, typed: "Run the tests"))
+        let wrapped = [rule, "❯ 1. Run the whole test suite and then", "  commit what passes", rule]
+        XCTAssertTrue(CLIPrompt.acceptsText(screen: wrapped, agent: .claude,
+                                            typed: "1. Run the whole test suite and then commit what passes"))
+        XCTAssertTrue(CLIPrompt.acceptsText(screen: [rule, "❯ ship it? (y/n)", rule], agent: .claude, typed: "ship it? (y/n)"))
+
+        let dialogBelow = [rule, "❯ 1. Run the tests", rule, " Do you want to proceed?", " ❯ 1. Yes", "   2. No"]
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: dialogBelow, agent: .claude, typed: "1. Run the tests"))
+        let menuBetweenRules = [rule, "❯ 1. Yes", "  2. No", rule]
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: menuBetweenRules, agent: .claude, typed: "1. Yes, go ahead"),
+                       "A short option is not the start of longer text")
+
+        let codex = ["• Earlier output", "", "› 1. Run the tests", "", "  gpt-5.5 high · ~/project"]
+        XCTAssertTrue(CLIPrompt.acceptsText(screen: codex, agent: .codex, typed: "1. Run the tests"))
+        XCTAssertFalse(CLIPrompt.codexAcceptsText(screen: codex))
+        let update = ["  Update available · 0.158.0 → 0.159.0", "› 1. Update now (runs `npm install -g @openai/codex`)",
+                      "  2. Skip", "  enter continue · esc skip"]
+        XCTAssertFalse(CLIPrompt.acceptsText(screen: update, agent: .codex, typed: "1. Run the tests"))
     }
 
     func testCodexAcceptsTextOnlyAtItsComposer() {

@@ -225,6 +225,45 @@ final class AppUpdatesTests: XCTestCase {
         XCTAssertEqual(model.operationError, "The app could not be set to open again: Stopped by the test.")
     }
 
+    /// Stands in for `NSApp.terminate` answered with `.terminateLater`: it
+    /// waits in a run loop of its own for a reply sent through the main
+    /// queue, as the delegate's Task sends it.
+    private final class TerminationProbe: NSObject {
+        var calls = 0
+        var replied = false
+
+        @objc func terminate(_ sender: Any?) {
+            calls += 1
+            var reply = false
+            DispatchQueue.main.async { reply = true }
+            let deadline = Date().addingTimeInterval(0.5)
+            while !reply, Date() < deadline { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+            replied = reply
+        }
+    }
+
+    @MainActor
+    func testRestartAsksToQuitWhereTheDelegateCanReply() {
+        // Restart runs in a Task, inside a main-queue block. Asked from there,
+        // terminate never hears back: Restart to update hung until 0.19.3.
+        let direct = TerminationProbe()
+        DispatchQueue.main.async { direct.terminate(nil) }
+        pumpMainRunLoop { direct.calls == 1 }
+        XCTAssertEqual(direct.calls, 1)
+        XCTAssertFalse(direct.replied)
+
+        let deferred = TerminationProbe()
+        DispatchQueue.main.async { MainActor.assumeIsolated { HostModel.requestTermination(of: deferred) } }
+        pumpMainRunLoop { deferred.calls == 1 }
+        XCTAssertEqual(deferred.calls, 1)
+        XCTAssertTrue(deferred.replied)
+    }
+
+    private func pumpMainRunLoop(until condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(3)
+        while !condition(), Date() < deadline { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+    }
+
     @MainActor
     private func restartModel(root: URL) throws -> (HostModel, URL) {
         let suite = "m4ix.cli.restart-update." + UUID().uuidString

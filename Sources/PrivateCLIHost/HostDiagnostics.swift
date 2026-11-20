@@ -7,7 +7,9 @@ import Foundation
 enum HostDiagnostics {
     static let logURL = HostPaths.profileBase.appendingPathComponent("host-events.jsonl")
     private static let previousURL = HostPaths.profileBase.appendingPathComponent("host-events.previous.jsonl")
-    private static let maxBytes: UInt64 = 1_000_000
+    /// Heartbeats for ten sessions fill 1 MB in about 18 hours, so a smaller
+    /// file lost a freeze from the day before. This keeps about six days.
+    private static let maxBytes: UInt64 = 4_000_000
     private static let writer = DispatchQueue(label: "m4ix.cli.diagnostics", qos: .utility)
 
     static func record(_ event: String, agent: String? = nil, session: UUID? = nil, exitCode: Int32? = nil,

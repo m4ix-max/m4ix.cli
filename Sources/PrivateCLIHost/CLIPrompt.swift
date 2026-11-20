@@ -74,14 +74,16 @@ enum CLIPrompt {
     /// Whether Return would submit text typed into the CLI's own input.
     /// `shellCommand` is set only when the text just typed starts with `!`:
     /// Claude then draws its input as `! …` in shell mode, and no other text
-    /// may be submitted there, or it would run as a command.
-    static func acceptsText(screen: [String], agent: Agent, shellCommand: Bool = false) -> Bool {
+    /// may be submitted there, or it would run as a command. `typed` is the
+    /// text just pasted, given only for the check before Return: the input
+    /// line then shows it, and `❯ 1. Run the tests` is that text, not a menu.
+    static func acceptsText(screen: [String], agent: Agent, shellCommand: Bool = false, typed: String? = nil) -> Bool {
         switch agent {
         case .claude, .hermes:
-            return rawRuledInputAcceptsText(screen: screen, agent: agent, shellCommand: shellCommand)
-                && terminalResponseRequest(screen: screen, agent: agent) == nil
+            return rawRuledInputAcceptsText(screen: screen, agent: agent, shellCommand: shellCommand, typed: typed)
+                && terminalResponseRequest(screen: screen, agent: agent, shellCommand: shellCommand, typed: typed) == nil
         case .codex:
-            return codexAcceptsText(screen: screen)
+            return codexAcceptsText(screen: screen, typed: typed)
         }
     }
 
@@ -97,15 +99,44 @@ enum CLIPrompt {
     /// for an approval, `? ❯` for a question, 🔐 or 🔑 for a password.
     /// Approval choices are numbered inside a panel, `│ ❯ 1. Allow once │`,
     /// where Return would choose for you.
-    private static func rawRuledInputAcceptsText(screen: [String], agent: Agent, shellCommand: Bool = false) -> Bool {
-        let options = agent == .hermes ? screen.map(unboxed) : screen
-        guard !options.contains(where: isNumberedOption) else { return false }
-        if agent == .hermes, hermesPanelChoice(in: screen) != nil { return false }
-        for index in screen.indices where index > 0 && isInputLine(screen[index], agent: agent, shellCommand: shellCommand) {
-            guard isRule(screen[index - 1]) else { continue }
-            if screen[(index + 1)...].contains(where: isRule) { return true }
+    private static func rawRuledInputAcceptsText(screen: [String], agent: Agent, shellCommand: Bool = false,
+                                                 typed: String? = nil) -> Bool {
+        guard let box = ruledInputBox(in: screen, agent: agent, shellCommand: shellCommand) else { return false }
+        let typedLine = showsTyped(typed, on: screen[box.input])
+        if agent == .claude {
+            // Claude's dialogs replace the box or open below it. Above it is
+            // the conversation, where an earlier prompt can start with `1.`.
+            if isNumberedOption(screen[box.input]), !typedLine { return false }
+            return !screen[(box.bottom + 1)...].contains(where: isNumberedOption)
         }
-        return false
+        let options = screen.map(unboxed)
+        guard !options.indices.contains(where: { ($0 != box.input || !typedLine) && isNumberedOption(options[$0]) }) else {
+            return false
+        }
+        return hermesPanelChoice(in: screen) == nil
+    }
+
+    /// The last input line directly under a rule, and the first rule below it.
+    private static func ruledInputBox(in screen: [String], agent: Agent, shellCommand: Bool) -> (input: Int, bottom: Int)? {
+        for index in screen.indices.reversed() where index > 0 && isRule(screen[index - 1])
+            && isInputLine(screen[index], agent: agent, shellCommand: shellCommand) {
+            if let bottom = screen.indices.first(where: { $0 > index && isRule(screen[$0]) }) { return (index, bottom) }
+        }
+        return nil
+    }
+
+    /// Whether an input line shows `typed`: `❯ 1. Run it` after "1. Run it",
+    /// or `!  git status` after "! git status". A long line wraps, so its
+    /// start counts too, but never a short one: a menu's `❯ 1. Yes` is not
+    /// "1. Yes, go ahead".
+    private static func showsTyped(_ typed: String?, on line: String) -> Bool {
+        guard let typed else { return false }
+        let expected = String(typed.prefix(while: { $0 != "\n" }).drop(while: { $0 == "!" || $0 == " " }))
+            .trimmingCharacters(in: .whitespaces)
+        let text = trimmed(line)
+        guard let glyph = text.first, "❯›!".contains(glyph) else { return false }
+        let shown = text.dropFirst().trimmingCharacters(in: .whitespaces)
+        return !shown.isEmpty && (shown == expected || (shown.count >= 20 && expected.hasPrefix(shown)))
     }
 
     /// The chosen row of a Hermes panel, however its choices are numbered:
@@ -115,10 +146,12 @@ enum CLIPrompt {
     }
 
     /// A non-default Hermes profile names itself before the prompt, `work ❯`.
+    /// Claude's shell-mode input starts the line; its footer, `  ! for shell
+    /// mode`, is indented.
     private static func isInputLine(_ line: String, agent: Agent, shellCommand: Bool = false) -> Bool {
         let text = trimmed(line)
         if text.hasPrefix("❯") { return true }
-        if shellCommand, agent == .claude { return text.hasPrefix("!") }
+        if shellCommand, agent == .claude { return line.hasPrefix("!") }
         return agent == .hermes && text.range(of: #"^[a-z0-9][a-z0-9_-]{0,63} ❯"#, options: .regularExpression) != nil
     }
 
@@ -140,13 +173,14 @@ enum CLIPrompt {
     /// Codex's composer is the last `›` line on screen. Its menus number
     /// their options, `› 1. Trust and continue`, so a numbered last line is
     /// a menu.
-    static func codexAcceptsText(screen: [String]) -> Bool {
-        rawCodexAcceptsText(screen: screen) && terminalResponseRequest(screen: screen, agent: .codex) == nil
+    static func codexAcceptsText(screen: [String], typed: String? = nil) -> Bool {
+        rawCodexAcceptsText(screen: screen, typed: typed)
+            && terminalResponseRequest(screen: screen, agent: .codex, typed: typed) == nil
     }
 
-    private static func rawCodexAcceptsText(screen: [String]) -> Bool {
+    private static func rawCodexAcceptsText(screen: [String], typed: String? = nil) -> Bool {
         guard let last = screen.last(where: { trimmed($0).hasPrefix("›") }) else { return false }
-        return !isNumberedOption(last)
+        return !isNumberedOption(last) || showsTyped(typed, on: last)
     }
 
     /// Only conceal an input we recognize in the actual visible viewport.
@@ -156,15 +190,16 @@ enum CLIPrompt {
         return rawInputStartRow(screen: screen, agent: agent)
     }
 
-    private static func rawInputStartRow(screen: [String], agent: Agent) -> Int? {
+    private static func rawInputStartRow(screen: [String], agent: Agent, shellCommand: Bool = false,
+                                         typed: String? = nil) -> Int? {
         switch agent {
         case .claude, .hermes:
-            guard rawRuledInputAcceptsText(screen: screen, agent: agent),
-                  let row = screen.indices.last(where: { isInputLine(screen[$0], agent: agent) }), row > 0,
-                  isRule(screen[row - 1]) else { return nil }
+            guard rawRuledInputAcceptsText(screen: screen, agent: agent, shellCommand: shellCommand, typed: typed),
+                  let row = screen.indices.last(where: { isInputLine(screen[$0], agent: agent, shellCommand: shellCommand) }),
+                  row > 0, isRule(screen[row - 1]) else { return nil }
             return row - 1
         case .codex:
-            guard rawCodexAcceptsText(screen: screen),
+            guard rawCodexAcceptsText(screen: screen, typed: typed),
                   let row = screen.indices.last(where: { trimmed(screen[$0]).hasPrefix("›") }) else { return nil }
             var start = row
             while start > 0 && screen[start - 1].trimmingCharacters(in: .whitespaces).isEmpty { start -= 1 }
@@ -176,15 +211,19 @@ enum CLIPrompt {
     /// Identifies a live keyboard interaction, including unnumbered choices
     /// and confirmation prompts. The signature lets focus move once per
     /// question without pulling readers back down on every scroll event.
-    static func terminalResponseRequest(screen: [String], agent: Agent) -> String? {
+    static func terminalResponseRequest(screen: [String], agent: Agent, shellCommand: Bool = false,
+                                        typed: String? = nil) -> String? {
         if agent == .codex, let footer = codexQuestionFooter(in: screen) {
             return footer.signature
         }
         let rows = screen.map { agent == .hermes ? unboxed($0) : $0.trimmingCharacters(in: .whitespaces) }
         let nonempty = rows.indices.filter { !rows[$0].isEmpty }
         guard let last = nonempty.last else { return nil }
-        let inputRow = rawInputStartRow(screen: screen, agent: agent)
+        let inputRow = rawInputStartRow(screen: screen, agent: agent, shellCommand: shellCommand, typed: typed)
         let afterInput = inputRow ?? -1
+        // The text just typed sits on the input line; it asks nothing.
+        let typedRow = typed == nil ? nil : inputLine(in: screen, agent: agent, shellCommand: shellCommand)
+            .flatMap { showsTyped(typed, on: screen[$0]) ? $0 : nil }
         var requestRow: Int?
 
         if agent == .codex {
@@ -196,7 +235,7 @@ enum CLIPrompt {
         }
 
         if let selected = nonempty.last(where: {
-            rows[$0].range(of: #"^[❯›▶>]\s*\d+[.)]\s+"#, options: .regularExpression) != nil
+            $0 != typedRow && rows[$0].range(of: #"^[❯›▶>]\s*\d+[.)]\s+"#, options: .regularExpression) != nil
         }), selected > afterInput {
             requestRow = selected
         }
@@ -218,7 +257,7 @@ enum CLIPrompt {
                 ? nonempty.last(where: { rows[$0].hasPrefix("❯") && !($0 > 0 && isRule(screen[$0 - 1])) }) : nil
             if let selected = hermesPanelChoice(in: screen) ?? loose { requestRow = requestRow ?? selected }
         }
-        for index in nonempty.suffix(4) where index > afterInput {
+        for index in nonempty.suffix(4) where index > afterInput && index != typedRow {
             let line = rows[index]
             guard line.count < 180 else { continue }
             let confirmation = line.range(of: #"(?:\[(?:y/n|yes/no)\]|\((?:y/n|yes/no)\))\s*[:?]?\s*$"#,
@@ -233,6 +272,14 @@ enum CLIPrompt {
         }
         guard let requestRow else { return nil }
         return rows[max(0, requestRow - 2)...last].joined(separator: "\n")
+    }
+
+    /// The row of the CLI's input line, where the text typed shows.
+    private static func inputLine(in screen: [String], agent: Agent, shellCommand: Bool) -> Int? {
+        switch agent {
+        case .claude, .hermes: return ruledInputBox(in: screen, agent: agent, shellCommand: shellCommand)?.input
+        case .codex: return screen.indices.last { trimmed(screen[$0]).hasPrefix("›") }
+        }
     }
 
     /// Codex queues asynchronous questions above its normal input. Unlike

@@ -485,23 +485,26 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         promptTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.isSendingPrompt = false; self.promptTask = nil }
-            if await self.type(text, images: images, bracketed: bracketed) {
+            if let stage = await self.type(text, images: images, bracketed: bracketed) {
+                self.promptRecovery = PromptRecovery(text: text, images: images)
+                HostDiagnostics.record("prompt_delivery_interrupted", agent: self.agent.rawValue, session: self.id,
+                                       details: self.interruption(at: stage, text: text, images: images))
+            } else {
                 self.recordConversationActivity(at: Date())
                 self.promptRecovery = nil
                 self.onPromptDelivered?()
-            } else {
-                self.promptRecovery = PromptRecovery(text: text, images: images)
-                HostDiagnostics.record("prompt_delivery_interrupted", agent: self.agent.rawValue, session: self.id)
             }
         }
         return true
     }
 
     /// Attaches the images, then types the text. Return goes last, and only
-    /// onto the input line.
-    private func type(_ text: String, images: [URL], bracketed: Bool) async -> Bool {
-        guard !Task.isCancelled, screenAcceptsText(), await attach(images, bracketed: bracketed) else { return false }
-        guard !Task.isCancelled, screenAcceptsText() else { return false }
+    /// onto the input line. Returns where delivery stopped, or nil once
+    /// Return is sent.
+    private func type(_ text: String, images: [URL], bracketed: Bool) async -> String? {
+        guard !Task.isCancelled, screenAcceptsText() else { return "before_paste" }
+        guard await attach(images, bracketed: bracketed) else { return "images" }
+        guard !Task.isCancelled, screenAcceptsText() else { return "before_paste" }
         // Claude does not space text away from the last image marker.
         if !text.isEmpty {
             let body = images.isEmpty ? text : " " + text
@@ -510,9 +513,26 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         try? await Task.sleep(nanoseconds: UInt64(CLIPrompt.returnDelay * 1_000_000_000))
         // A dialog can open in the gap; Return would answer it. A leading
         // `!` has put Claude in shell mode, which redraws the input line.
-        guard !Task.isCancelled, screenAcceptsText(shellCommand: images.isEmpty && text.hasPrefix("!")) else { return false }
+        guard !Task.isCancelled, screenAcceptsText(shellCommand: images.isEmpty && text.hasPrefix("!"), typed: text) else {
+            return "before_return"
+        }
         terminal.send(data: [0x0d][...])
-        return true
+        return nil
+    }
+
+    /// Where an interrupted send stopped and what held the screen then,
+    /// never its text: a question, no input line the composer recognises,
+    /// or no CLI. The version tells a CLI update from a composer fault.
+    private func interruption(at stage: String, text: String, images: [URL]) -> [String: Any] {
+        var held = "stopped"
+        if !Task.isCancelled, hostsConversation {
+            let typed = stage == "before_return" ? text : nil
+            let request = CLIPrompt.terminalResponseRequest(screen: CLIPrompt.liveScreen(of: terminal), agent: agent,
+                                                            shellCommand: typed != nil && images.isEmpty && text.hasPrefix("!"),
+                                                            typed: typed)
+            held = request == nil ? "no_input" : "question"
+        }
+        return ["stage": stage, "screen": held, "cliVersion": compatibility.version]
     }
 
     /// Pastes each image path and waits for the CLI to attach it before the
@@ -541,9 +561,10 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         return false
     }
 
-    private func screenAcceptsText(shellCommand: Bool = false) -> Bool {
+    private func screenAcceptsText(shellCommand: Bool = false, typed: String? = nil) -> Bool {
         guard hostsConversation else { return false }
-        return CLIPrompt.acceptsText(screen: CLIPrompt.liveScreen(of: terminal), agent: agent, shellCommand: shellCommand)
+        return CLIPrompt.acceptsText(screen: CLIPrompt.liveScreen(of: terminal), agent: agent,
+                                     shellCommand: shellCommand, typed: typed)
     }
 
     func startIfPending() {
@@ -925,7 +946,14 @@ final class HostModel: ObservableObject {
     var runningRevision = AppUpdates.revision(info: Bundle.main.infoDictionary)
     var runningApplication = Bundle.main.bundleURL
     /// Quits the app. Tests replace it.
-    var terminateApp: () -> Void = { NSApp.terminate(nil) }
+    var terminateApp: () -> Void = { HostModel.requestTermination(of: NSApp) }
+    /// Restart to update runs in a Task, inside a block of the main queue.
+    /// Asked from there, `terminate` waits for the delegate's reply in a run
+    /// loop that does not serve that queue, and the reply comes from the main
+    /// actor, so the app hung. Performed on the next pass, it is asked outside.
+    static func requestTermination(of application: NSObject) {
+        application.perform(#selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+    }
     @Published var operationError: String?
     @Published var selected: Agent = .claude {
         didSet { preferences.set(selected.rawValue, forKey: Self.agentPreferenceKey) }

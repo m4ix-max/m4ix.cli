@@ -4,6 +4,59 @@ What each release changed and the evidence it was checked against, newest
 first. Notes for users are in `Packaging/RELEASE-NOTES.md`; requirements and
 the next work are in `ROADMAP.md`.
 
+## Restart to update, numbered messages and shell commands for 0.19.3
+
+Restart to update hung on every release since 0.18.10. The button runs
+`restartToUpdate()` in a Task, and a main-actor Task runs as a block on the
+main queue. From there `NSApp.terminate` met `.terminateLater` and waited
+for the reply in a nested run loop, and CFRunLoop does not serve the main
+queue inside one of its own blocks; the reply comes from a main-actor Task,
+so it never came. ⌘Q arrives as an event, outside any block, which is why an
+ordinary quit worked. A 40-line AppKit program reproduced it: terminate
+asked from a timer quit, from a main-actor Task it hung for the full five
+seconds allowed, and performed on the next pass of the run loop it quit.
+`terminateApp` now performs `terminate:` with no delay. The restart tests
+replace `terminateApp`, so they never reached this path. A new test uses a
+probe that waits for a main-queue reply as the delegate does: asked inside
+a main-queue block the reply never arrives, and through the new request it
+does.
+
+The event log of 18 to 20 November held one interrupted send, a `!` command
+to Claude, and Recovery held seven unconfirmed drafts back to October, two
+of them `!` commands. Claude Code 2.1.329, run through the launcher under a
+pseudo-terminal and never sent Return, draws shell mode as 2.1.296 did, now
+with a blank line above the footer. The fault was the composer's. In shell
+mode the menu check looked for the input box without the shell flag,
+missed it, and read the whole conversation above for options, and the
+indented footer, `! for shell mode`, passed for an input line. Apart from
+shell mode, the guard against numbered options covered the whole screen: a
+message starting `1.` stopped before Return, and once on screen as an
+earlier prompt it refused every later send. Rows above Claude's box are now
+conversation and rows below it still block. The check before Return is
+given the text just typed, and its own line is not an option when it shows
+that text exactly, or its first 20 characters or more once wrapped, so a
+short option such as `❯ 1. Yes` never passes for longer text. Interrupted
+sends now record the stage, whether a question or no recognised input held
+the screen, and the CLI version.
+
+Two freezes in the same days, of 7 and 4 seconds, were sampled in the
+one-second attention timer, stopped on a lock word and a Unicode table
+lookup. That timer's screen reading measured 0.29 ms per Claude session and
+0.16 ms per Codex session in a release build, with the patterns already
+cached, so it was left alone. The Mac had 39 of its 40 GB of swap in use
+during this check, which fits a thread waiting on cold pages. The log
+rotated at 1 MB, about 18 hours of ten sessions' heartbeats, so a freeze
+from the day before was gone; it now rotates at 4 MB.
+
+On 2026-11-20 the full suite ran 172 tests, with four opt-in skips and no
+failures, under the Swift 6.4.2 toolchain; the run left the real event log
+untouched. Launcher checks passed. New tests cover the quit request, sends
+under conversations that read like menus in both modes, numbered and
+wrapped messages, a short option against longer text, and Codex's composer
+and update offer. Version 0.19.3 (64) was not packaged or installed. The
+running 0.19.2 still hangs on Restart to update, so this build goes in with
+`build-and-package.sh --install`, then ⌘Q and opening the app again.
+
 ## Message times for 0.19.2
 
 Every message in the chat view and in Shared chat shows its time at the

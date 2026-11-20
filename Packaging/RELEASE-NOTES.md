@@ -1,3 +1,20 @@
+# m4ix.CLI 0.19.3
+
+Restart to update no longer hangs. It asked the app to quit from a place
+where the quit could never finish, so the window stopped answering and the
+build installed only after a force quit.
+
+Messages that start with a number, such as "1. Run the tests", now send.
+The message field read that line as a menu option and stopped short of
+Return, leaving the text in the CLI's input. An earlier message like it,
+still on screen, no longer holds up the next one, and a Claude shell
+command no longer stops for a line in the conversation that only looks
+like a question.
+
+When a message cannot be sent, the event log records where it stopped,
+what held the terminal and the CLI's version, never the text. The log now
+keeps about six days instead of one.
+
 # m4ix.CLI 0.19.2
 
 Every message in chat now shows its time at the right edge of its first
