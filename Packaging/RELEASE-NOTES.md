@@ -1,3 +1,37 @@
+# m4ix.CLI 0.19.2
+
+Every message in chat now shows its time at the right edge of its first
+line: your messages, each reply, and each run of tool steps. The first
+message of each day sits under a rule with its date, and hovering over a
+time shows the full date and second. Times come from the provider's own
+conversation log, so earlier conversations show when each message was
+written. Shared chat shows its times the same way.
+
+# m4ix.CLI 0.19.1
+
+The sidebar now opens with Active: conversations across all projects, grouped
+by Your turn, Working, Queued, and Waiting. Every row names its project and
+provider, and opening a conversation switches to the correct workspace.
+
+Projects is an expandable list with active counts, attention badges, and
+collapsed History for earlier conversations. Search covers projects, paths,
+providers, and conversation titles, including hidden history. The selected
+view and expanded folders are remembered. Add project and refresh stay at
+the bottom, accessible without scrolling through conversations.
+
+# m4ix.CLI 0.18.13
+
+Sent images now appear as thumbnails in Claude and Codex chat history,
+including messages containing only an image. Image tags and repeated
+attachment labels are hidden. Codex's startup workspace instructions and
+environment context no longer appear as a chat message.
+
+# m4ix.CLI 0.18.12
+
+Pasting an image whose clipboard also contains the literal `[image]` text
+placeholder now attaches the actual image and shows its thumbnail in the
+composer. Ordinary rich-text clipboard content still pastes as text.
+
 # m4ix.CLI 0.18.11
 
 Hermes's name and mark are violet in chat, with a deeper shade in light

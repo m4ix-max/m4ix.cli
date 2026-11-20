@@ -952,6 +952,15 @@ final class HostModel: ObservableObject {
     @Published private(set) var projects: [ProjectRecord]
     @Published private(set) var conversations: [ConversationRecord] = []
     @Published private(set) var sessionRevision = 0
+    /// Sidebar grouping observes activity without triggering session selection effects.
+    @Published private(set) var sidebarRevision = 0
+    @Published var sidebarNavigation = SidebarNavigation() {
+        didSet {
+            guard sidebarNavigation != oldValue,
+                  let data = try? JSONEncoder().encode(sidebarNavigation) else { return }
+            preferences.set(data, forKey: "PrivateCLIHostSidebarNavigation")
+        }
+    }
     /// Live sessions that finished a turn or asked for input while out of
     /// view, with the CLI's message when it sent one.
     @Published private(set) var attention: [UUID: String] = [:] {
@@ -959,6 +968,7 @@ final class HostModel: ObservableObject {
     }
 
     private var workspaces: [String: ProjectWorkspace] = [:]
+    private var sidebarObservations: [UUID: AnyCancellable] = [:]
     private var savedProjectPaths: [String]
     private var hiddenProjectPaths: Set<String>
     private let historyCache = ConversationHistoryCache()
@@ -1042,6 +1052,10 @@ final class HostModel: ObservableObject {
         self.hiddenProjectPaths = Set(defaults.stringArray(forKey: Self.hiddenProjectsPreferenceKey) ?? [])
         self.workingDirectory = URL(fileURLWithPath: initialPath, isDirectory: true)
         self.projects = self.savedProjectPaths.map(ProjectRecord.init(path:))
+        if let data = defaults.data(forKey: "PrivateCLIHostSidebarNavigation"),
+           let navigation = try? JSONDecoder().decode(SidebarNavigation.self, from: data) {
+            self.sidebarNavigation = navigation
+        }
         self.workspaces[workspaceKey(initialPath)] = ProjectWorkspace(projectPath: initialPath,
             profileBase: production.base(for: selectedProfileID), profileID: selectedProfileID)
         self.pendingUpdate = AppUpdates.restorePending(root: profileBase, preferences: defaults)
@@ -1102,6 +1116,12 @@ final class HostModel: ObservableObject {
 
     private func observe(_ sessions: [TerminalSession]) {
         for session in sessions {
+            sidebarObservations[session.id] = Publishers.CombineLatest4(
+                session.$state, session.$isWorking, session.$pendingResumeID, session.$displayTitle
+            )
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.sidebarRevision += 1 }
             session.onConversationActivity = { [weak self] in self?.sessionRevision += 1 }
             session.onStateExit = { [weak self] in
                 self?.sessionRevision += 1
@@ -1153,7 +1173,10 @@ final class HostModel: ObservableObject {
     }
 
     func selectLiveSession(_ session: TerminalSession) {
-        guard currentWorkspace.select(session, for: session.agent) else { return }
+        guard let workspace = workspaces[workspaceKey(session.projectPath, profileID: session.profileID)],
+              workspace.select(session, for: session.agent) else { return }
+        selectProfile(session.profileID)
+        selectProject(ProjectRecord(path: session.projectPath))
         selected = session.agent
         sessionRevision += 1
     }
@@ -1641,6 +1664,7 @@ final class HostModel: ObservableObject {
 
     func removeLiveSession(_ session: TerminalSession) {
         if workspaces[workspaceKey(session.projectPath, profileID: session.profileID)]?.remove(session, for: session.agent) == true {
+            sidebarObservations.removeValue(forKey: session.id)
             clearAttention(for: session.id)
             sessionRevision += 1
             saveRestorableSessions()
@@ -2490,270 +2514,6 @@ private struct ModelEffortMenu: View {
         .help("Model and reasoning effort for new conversations")
         .accessibilityLabel("Model and reasoning effort")
         .accessibilityValue(summary(choice))
-    }
-}
-
-private struct ProjectSidebar: View {
-    @ObservedObject var model: HostModel
-    let onSelectSession: (TerminalSession) -> Void
-    let onStopSession: (TerminalSession) -> Void
-    let onRemoveSession: (TerminalSession) -> Void
-
-    @State private var searchText = ""
-
-    private var visibleLiveSessions: [TerminalSession] {
-        let sessions = model.liveSessionsForCurrentProject()
-        guard !searchText.isEmpty else { return sessions }
-        return sessions.filter { $0.displayTitle.localizedCaseInsensitiveContains(searchText) }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                Text("m4ix.CLI")
-                    .font(HostTheme.utility(14, medium: true))
-                    .tracking(0.28)
-                    .textCase(.uppercase)
-                    .foregroundStyle(HostTheme.ink)
-                Spacer()
-            }
-            .padding(.horizontal, HostTheme.spacing24)
-            .frame(height: 68)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(HostTheme.border).frame(height: HostTheme.hairlineWidth)
-            }
-
-            HStack {
-                sectionLabel("PROJECTS")
-                Spacer()
-                Button(action: model.addProject) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(HostTheme.ink)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(HoverButtonStyle())
-                .accessibilityLabel("Add project")
-                .help("Add project folder")
-            }
-            .padding(.leading, HostTheme.spacing24)
-            .padding(.trailing, 12)
-            .padding(.top, HostTheme.spacing24)
-            .padding(.bottom, HostTheme.spacing8)
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.projects) { project in projectRow(project) }
-                }
-            }
-            .frame(maxHeight: 144)
-            .padding(.horizontal, HostTheme.spacing16)
-            .padding(.bottom, HostTheme.spacing16)
-
-            Rectangle().fill(HostTheme.border).frame(height: HostTheme.hairlineWidth)
-
-            HStack {
-                sectionLabel("CONVERSATIONS")
-                Spacer()
-                Button { model.refreshHistory() } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(HostTheme.graphite)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(HoverButtonStyle())
-                .accessibilityLabel("Refresh conversations")
-                .help("Refresh conversations")
-            }
-            .padding(.leading, HostTheme.spacing24)
-            .padding(.trailing, 12)
-            .padding(.top, HostTheme.spacing16)
-            .padding(.bottom, HostTheme.spacing8)
-
-            HStack(spacing: HostTheme.spacing8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(HostTheme.graphite)
-                TextField("Search conversations", text: $searchText)
-                    .font(HostTheme.serif(14))
-                    .foregroundStyle(HostTheme.ink)
-                    .textFieldStyle(.plain)
-                    .accessibilityLabel("Search conversations")
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 40)
-            .background(HostTheme.paperDeep, in: RoundedRectangle(cornerRadius: HostTheme.controlRadius))
-            .padding(.horizontal, HostTheme.spacing24)
-            .padding(.bottom, HostTheme.spacing8)
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if !visibleLiveSessions.isEmpty {
-                        sectionLabel("HISTORY")
-                            .padding(.horizontal, HostTheme.spacing8)
-                            .padding(.top, HostTheme.spacing8)
-                            .padding(.bottom, HostTheme.spacing8)
-                        ForEach(visibleLiveSessions) { session in
-                            LiveConversationRow(
-                                session: session,
-                                isSelected: model.isSelected(session),
-                                attentionMessage: model.attentionMessage(for: session),
-                                onSelect: { onSelectSession(session) },
-                                onStop: { onStopSession(session) },
-                                onRemove: { onRemoveSession(session) }
-                            )
-                        }
-                    }
-                    if visibleLiveSessions.isEmpty {
-                        VStack(alignment: .leading, spacing: HostTheme.spacing8) {
-                            Text(searchText.isEmpty ? "No conversations yet" : "No matches")
-                                .font(HostTheme.serif(16))
-                                .foregroundStyle(HostTheme.graphite)
-                            if searchText.isEmpty {
-                                Text("Your \(model.selected.title) work in this project will appear here.")
-                                    .font(HostTheme.serif(13))
-                                    .foregroundStyle(HostTheme.graphite)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .padding(.horizontal, HostTheme.spacing8)
-                        .padding(.top, HostTheme.spacing16)
-                    }
-                }
-                .padding(.horizontal, HostTheme.spacing16)
-                .padding(.bottom, HostTheme.spacing16)
-            }
-        }
-        .frame(width: 282)
-        .background(HostTheme.paper)
-        .overlay(alignment: .trailing) {
-            Rectangle().fill(HostTheme.border).frame(width: HostTheme.hairlineWidth)
-        }
-        .onChange(of: model.selected) { _ in searchText = "" }
-        .onChange(of: model.workingDirectory) { _ in searchText = "" }
-    }
-
-    private func sectionLabel(_ title: String) -> some View {
-        Text(title)
-            .font(HostTheme.utility(11, medium: true))
-            .tracking(0.22)
-            .foregroundStyle(HostTheme.graphite)
-    }
-
-    private func projectRow(_ project: ProjectRecord) -> some View {
-        let isSelected = project.path == model.workingDirectory.path
-        return Button { model.selectProject(project) } label: {
-            HStack(spacing: HostTheme.spacing8) {
-                Text(project.name)
-                    .font(HostTheme.serif(16))
-                    .foregroundStyle(project.isAvailable ? HostTheme.ink : HostTheme.graphite)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if model.needsAttention(project: project.path) {
-                    AttentionPixel()
-                }
-                if !project.isAvailable {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(HostTheme.graphite)
-                }
-            }
-            .padding(.horizontal, HostTheme.spacing8)
-            .frame(height: 44)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? HostTheme.paperDeep : HostTheme.paper)
-            .overlay(alignment: .leading) {
-                if isSelected { Rectangle().fill(HostTheme.ink).frame(width: 2) }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(HoverButtonStyle())
-        .help(project.path)
-        .accessibilityLabel(project.isAvailable ? project.name : "\(project.name), folder unavailable")
-        .accessibilityValue(project.path)
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .contextMenu {
-            Button("Show in Finder") { model.revealProject(project) }
-                .disabled(!project.isAvailable)
-            Button("Remove from sidebar") { model.removeProject(project) }
-                .disabled(!model.canRemoveProject(project))
-        }
-    }
-}
-
-private struct LiveConversationRow: View {
-    private var status: String {
-        if session.pendingResumeID != nil { return session.isPaused ? "PAUSED" : "RESTORED" }
-        if attentionMessage != nil { return "YOUR TURN" }
-        guard case .running = session.state else { return session.state.description.uppercased() }
-        return session.isWorking ? "WORKING" : "WAITING"
-    }
-
-    @ObservedObject var session: TerminalSession
-    let isSelected: Bool
-    /// Non-nil when the session needs you; empty when the CLI sent no message.
-    let attentionMessage: String?
-    let onSelect: () -> Void
-    let onStop: () -> Void
-    let onRemove: () -> Void
-
-    var body: some View {
-        Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(session.displayTitle)
-                    .font(HostTheme.serif(15))
-                    .foregroundStyle(HostTheme.ink)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 6) {
-                    if session.pendingResumeID != nil {
-                        Image(systemName: "clock.arrow.circlepath")
-                    }
-                    if attentionMessage != nil { AttentionPixel() }
-                    Text("\(session.agent.title.uppercased()) · \(status)")
-                        .font(HostTheme.utility(10, medium: attentionMessage != nil))
-                        .tracking(0.2)
-                        .foregroundStyle(attentionMessage != nil ? HostTheme.ink : HostTheme.graphite)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .help(session.pendingResumeID == nil ? attentionMessage ?? ""
-                      : session.isPaused ? "Paused to free a slot for another session. Select to resume."
-                      : "Saved from the previous launch. Select to start the CLI and resume.")
-            }
-            .padding(.horizontal, HostTheme.spacing8)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? HostTheme.paperDeep : HostTheme.paper)
-            .overlay(alignment: .leading) {
-                if isSelected { Rectangle().fill(HostTheme.ink).frame(width: 2) }
-            }
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(HostTheme.borderSubtle).frame(height: HostTheme.hairlineWidth)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(HoverButtonStyle())
-        .help("\(session.agent.title) · \(session.displayTitle) · \(status.capitalized). Select to open this session.")
-        .accessibilityLabel("\(session.agent.title), \(session.displayTitle), \(status.capitalized)")
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-        .contextMenu {
-            if case .running = session.state {
-                Button("Stop session", role: .destructive, action: onStop)
-            } else if session.state == .stopping {
-                Button("Stopping…") {}
-                    .disabled(true)
-            } else {
-                Button("Remove from history", action: onRemove)
-            }
-            if let initialPrompt = session.initialPrompt {
-                Button("Copy original task") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(initialPrompt, forType: .string)
-                }
-            }
-        }
     }
 }
 

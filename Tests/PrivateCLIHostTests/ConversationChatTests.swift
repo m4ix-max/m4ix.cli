@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Vision
 import XCTest
 @testable import PrivateCLIHost
 
@@ -32,6 +33,93 @@ final class ConversationTranscriptTests: XCTestCase {
         XCTAssertEqual(unchanged, snapshot)
     }
 
+    func testCodexCurrentStartupContextStaysHiddenWithoutHidingRealMessages() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID().uuidString.lowercased()
+        let file = try logFile(root, agent: .codex, id: id)
+        let instructions = " \n# AGENTS.md instructions\n\n<INSTRUCTIONS>Workspace rules</INSTRUCTIONS>"
+        try write([
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [
+                ["type": "input_text", "text": instructions],
+                ["type": "input_text", "text": "<environment_context>Machine context</environment_context>"]]]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": instructions]],
+            codexMessage("user", "Why do I see # AGENTS.md instructions?"),
+            codexMessage("assistant", "# AGENTS.md instructions\nThis is the heading you asked about."),
+            codexMessage("user", "# AGENTS.md instructions example\nPlease explain this heading.")
+        ], to: file)
+        let snapshot = await ConversationTranscriptReader(agent: .codex, profile: root, conversationID: id).read()
+        XCTAssertEqual(snapshot.messages.map(\.text), [
+            "Why do I see # AGENTS.md instructions?",
+            "# AGENTS.md instructions\nThis is the heading you asked about.",
+            "# AGENTS.md instructions example\nPlease explain this heading."
+        ])
+    }
+
+    func testCodexImagesSurviveWithoutLocalFilesAndHideOnlyAttachmentMarkup() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID().uuidString.lowercased()
+        let file = try logFile(root, agent: .codex, id: id)
+        let image: [String: Any] = ["type": "input_image",
+                                   "image_url": "data:image/png;base64," + (try chatTestImage()).base64EncodedString()]
+        func message(_ blocks: [[String: Any]]) -> [String: Any] {
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": blocks]]
+        }
+        let wrapped: [[String: Any]] = [
+            ["type": "input_text", "text": "<image name=[Image #1] path=\"/missing/pruned-image.png\">"],
+            image, ["type": "input_text", "text": "</image>"]
+        ]
+        try write([
+            message(wrapped + [["type": "input_text", "text": "[Image #1]  testing"]]),
+            message(wrapped + [["type": "input_text", "text": "[Image #1]"]]),
+            message([image, image, ["type": "input_text", "text": "[Image #2] [Image #3] Compare [Image #2] with [Image #3]."]]),
+            codexMessage("user", "Explain <image name=sample> and </image>."),
+            codexMessage("user", "[Image #1] is a literal example.")
+        ], to: file)
+        let reader = ConversationTranscriptReader(agent: .codex, profile: root, conversationID: id)
+        let snapshot = await reader.read()
+        XCTAssertEqual(snapshot.messages.map(\.text), [
+            "testing", "", "Compare [Image #2] with [Image #3].",
+            "Explain <image name=sample> and </image>.", "[Image #1] is a literal example."
+        ])
+        XCTAssertEqual(snapshot.messages.map { $0.images.count }, [1, 1, 2, 0, 0])
+        for attachment in snapshot.messages.flatMap(\.images) {
+            let data = try XCTUnwrap(attachment.thumbnail)
+            let image = try XCTUnwrap(NSBitmapImageRep(data: data))
+            XCTAssertEqual(image.pixelsWide, 480)
+            XCTAssertEqual(image.pixelsHigh, 320)
+            XCTAssertLessThan(data.count, 100_000)
+        }
+        let unchanged = await reader.read()
+        XCTAssertEqual(unchanged, snapshot, "Following the log must not duplicate attachments")
+    }
+
+    func testClaudeEmbeddedAndUnavailableImagesKeepTheirMessages() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID().uuidString.lowercased()
+        let file = try logFile(root, agent: .claude, id: id)
+        let image: [String: Any] = ["type": "image", "source": [
+            "type": "base64", "media_type": "image/png", "data": (try chatTestImage()).base64EncodedString()
+        ]]
+        try write([
+            claudeMessage("user", content: [["type": "text", "text": "[Image #1] Look at this"], image], id: "image", session: id),
+            claudeMessage("user", content: [image], id: "image-only", session: id),
+            claudeMessage("user", content: [["type": "image", "source": ["type": "base64", "data": "broken"]]],
+                          id: "broken-image", session: id),
+            claudeMessage("user", content: [["type": "image", "source": ["type": "url", "url": "https://example.org/private.png"]]],
+                          id: "remote-image", session: id)
+        ], to: file)
+        let snapshot = await ConversationTranscriptReader(agent: .claude, profile: root, conversationID: id).read()
+        XCTAssertEqual(snapshot.messages.map(\.text), ["Look at this", "", "", ""])
+        XCTAssertEqual(snapshot.messages.map { $0.images.count }, [1, 1, 1, 1])
+        XCTAssertNotNil(snapshot.messages[0].images[0].thumbnail)
+        XCTAssertNotNil(snapshot.messages[1].images[0].thumbnail)
+        XCTAssertNil(snapshot.messages[2].images[0].thumbnail)
+        XCTAssertNil(snapshot.messages[3].images[0].thumbnail)
+    }
+
     func testClaudeSkipsToolsSidechainsAndOtherSessionsAndShowsImages() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -50,7 +138,8 @@ final class ConversationTranscriptTests: XCTestCase {
         try write(rows, to: file)
         let reader = ConversationTranscriptReader(agent: .claude, profile: root, conversationID: id)
         let snapshot = await reader.read()
-        XCTAssertEqual(snapshot.messages.map(\.text), ["Open the link", "[Image attachment]\n\nLook at this", "https://example.com"])
+        XCTAssertEqual(snapshot.messages.map(\.text), ["Open the link", "Look at this", "https://example.com"])
+        XCTAssertEqual(snapshot.messages[1].images.count, 1)
         XCTAssertEqual(snapshot.messages.map(\.speaker), ["you", "you", "claude"])
     }
 
@@ -179,6 +268,36 @@ final class ConversationTranscriptTests: XCTestCase {
                        "Read 1 file, searched once, edited 2 files, ran 1 command and used the web 2 times")
     }
 
+    func testMessagesAndStepRunsCarryTheTimeTheirProviderLogged() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        func at(_ stamp: String, _ row: [String: Any]) -> [String: Any] { row.merging(["timestamp": stamp]) { $1 } }
+        let id = UUID().uuidString.lowercased()
+        try write([
+            at("2026-10-28T22:59:30.250Z", claudeMessage("user", content: "Fix the parser", id: "u1", session: id)),
+            at("2026-10-28T22:59:41.000Z", claudeMessage("assistant", content: [toolUse("t1", "Read", ["file_path": "/work/Parser.swift"])], id: "a1", session: id)),
+            at("2026-10-28T23:00:05.000Z", claudeMessage("assistant", content: [toolUse("t2", "Bash", ["command": "swift test"])], id: "a2", session: id)),
+            at("2026-10-28T23:01:12.500Z", claudeMessage("assistant", content: "Fixed.", id: "a3", session: id)),
+            claudeMessage("user", content: "Thanks", id: "u2", session: id)
+        ], to: try logFile(root, agent: .claude, id: id))
+        let claude = await ConversationTranscriptReader(agent: .claude, profile: root, conversationID: id).read()
+        XCTAssertEqual(claude.messages.map(\.text), ["Fix the parser", "", "Fixed.", "Thanks"])
+        XCTAssertEqual(claude.messages.map(\.date), [1_793_228_370.25, 1_793_228_381, 1_793_228_472.5, nil]
+            .map { $0.map(Date.init(timeIntervalSince1970:)) }, "A run of steps keeps its first step's time; an unstamped line has none")
+
+        let codexID = UUID().uuidString.lowercased()
+        try write([
+            at("2026-10-29T08:15:00.125Z", codexMessage("user", "Tidy the readme")),
+            at("2026-10-29T08:15:09Z", ["type": "event_msg", "payload": ["type": "item_completed", "item":
+                ["type": "FileChange", "id": "f1", "changes": ["README.md": ["type": "update"]]]]]),
+            at("2026-10-29T08:16:30.750Z", codexMessage("assistant", "Tidied.", phase: "final_answer"))
+        ], to: try logFile(root, agent: .codex, id: codexID))
+        let codex = await ConversationTranscriptReader(agent: .codex, profile: root, conversationID: codexID).read()
+        XCTAssertEqual(codex.messages.map(\.text), ["Tidy the readme", "", "Tidied."])
+        XCTAssertEqual(codex.messages.map(\.date), [1_793_261_700.125, 1_793_261_709, 1_793_261_790.75]
+            .map(Date.init(timeIntervalSince1970:)), "A stamp without milliseconds still reads")
+    }
+
     private func toolUse(_ id: String, _ name: String, _ input: [String: Any]) -> [String: Any] {
         ["type": "tool_use", "id": id, "name": name, "input": input]
     }
@@ -223,6 +342,52 @@ final class ConversationTranscriptTests: XCTestCase {
 
 @MainActor
 final class ConversationChatTests: XCTestCase {
+    func testImageTurnsRenderAtFullAndSplitWidths() throws {
+        let block: [String: Any] = [
+            "type": "input_image", "image_url": "data:image/png;base64," + (try chatTestImage()).base64EncodedString()
+        ]
+        let attachment = ConversationImage(id: "preview", block: block)
+        let secondAttachment = ConversationImage(id: "second-preview", block: block)
+        XCTAssertNotNil(attachment.thumbnail)
+        for width: CGFloat in [800, 440] {
+            let content = VStack(spacing: 28) {
+                ChatTurn(speaker: "you", text: "testing", images: [attachment])
+                ChatTurn(speaker: "codex", text: "I can see the image.")
+                ChatTurn(speaker: "you", text: "", images: [attachment, secondAttachment])
+            }.padding(24).frame(width: width).background(HostTheme.paper)
+            let view = NSHostingView(rootView: content)
+            view.frame = NSRect(origin: .zero, size: view.fittingSize)
+            view.layoutSubtreeIfNeeded()
+            let texts = descendants(view).compactMap { $0 as? ChatLinkTextView }
+            XCTAssertEqual(texts.map(\.string), ["testing", "I can see the image."])
+            XCTAssertGreaterThan(view.frame.height, 500, "Image-only turns must occupy visible space")
+            XCTAssertLessThan(view.frame.height, 850, "Thumbnails must stay bounded")
+            for text in texts {
+                let frame = text.convert(text.bounds, to: view)
+                XCTAssertGreaterThanOrEqual(frame.minX, 0)
+                XCTAssertLessThanOrEqual(frame.maxX, width)
+            }
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            var imagePixels = 0
+            for y in stride(from: 0, to: bitmap.pixelsHigh, by: 8) {
+                for x in stride(from: 0, to: bitmap.pixelsWide, by: 8) {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                       color.greenComponent > 0.6, color.redComponent < 0.5, color.blueComponent > 0.35 {
+                        imagePixels += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(imagePixels, 500, "The pictures must be drawn, not just reserve space")
+            if let output = ProcessInfo.processInfo.environment["M4IX_UI_PREVIEW_DIR"] {
+                let directory = URL(fileURLWithPath: output)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: directory.appendingPathComponent("chat-images-\(Int(width)).png"))
+            }
+        }
+    }
+
     func testWebLinksPreferSafariWhileFilesAndMailUseTheirUsualApps() throws {
         var safariLinks: [URL] = []
         var defaultLinks: [URL] = []
@@ -627,5 +792,79 @@ final class ConversationChatTests: XCTestCase {
         }
     }
 
+    func testDayLinesOpenTheFirstTimedMessageAndEachLocalDay() throws {
+        var stockholm = Calendar(identifier: .gregorian)
+        stockholm.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Stockholm"))
+        var utc = stockholm
+        utc.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        // 23:30, 23:50 and then 00:10 on the 29th in Stockholm; all three are
+        // on the 28th in UTC. The last is 09:00 on the 29th in Stockholm.
+        let dates: [Date?] = [nil, 1_793_226_600, 1_793_227_800, nil, 1_793_229_000, 1_793_260_800]
+            .map { $0.map(Date.init(timeIntervalSince1970:)) }
+        XCTAssertEqual(ChatDay.starts(dates, calendar: stockholm), [1, 4])
+        XCTAssertEqual(ChatDay.starts(dates, calendar: utc), [1, 5])
+        XCTAssertEqual(ChatDay.starts([nil, nil], calendar: stockholm), [])
+    }
+
+    func testEveryMessageShowsItsTimeAtTheRightEdgeAtFullAndSplitWidths() throws {
+        let start = Date(timeIntervalSince1970: 1_793_226_600)
+        let times = [0, 1, 2, 17].map { start.addingTimeInterval(Double($0) * 60) }
+        let steps = [ConversationStep(id: "1", kind: .read, title: "Read Parser.swift", file: "/work/Parser.swift")]
+        let chat = VStack(alignment: .leading, spacing: 0) {
+            ChatDay(date: times[0])
+            ChatTurn(speaker: "you", text: "Fix the parser.", date: times[0]).padding(.top, 16)
+            ChatTurn(speaker: "claude", text: "Reading it first.", date: times[1]).padding(.top, 28)
+            ChatTurn(speaker: "claude", text: "", continues: true, steps: steps, date: times[2]).padding(.top, 12)
+            ChatTurn(speaker: "claude", text: "Fixed, and the parser tests pass.", continues: true, date: times[3]).padding(.top, 12)
+        }
+        let day = times[0].formatted(.dateTime.weekday(.wide).day().month(.wide)).uppercased()
+        for width: CGFloat in [800, 440] {
+            for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+                let view = NSHostingView(rootView: chat.padding(24).frame(width: width)
+                    .background(HostTheme.paper).foregroundStyle(HostTheme.ink))
+                view.appearance = NSAppearance(named: appearance)
+                view.frame = NSRect(origin: .zero, size: view.fittingSize)
+                view.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                let request = VNRecognizeTextRequest()
+                request.recognitionLanguages = ["en-US"]
+                request.usesLanguageCorrection = false
+                try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage), options: [:]).perform([request])
+                let lines = (request.results ?? []).compactMap { line in
+                    line.topCandidates(1).first.map { ($0.string, line.boundingBox) }
+                }
+                XCTAssertTrue(lines.contains { $0.0.uppercased().contains(day) }, "\(name) \(width): \(lines.map(\.0))")
+                for time in times.map({ $0.formatted(date: .omitted, time: .shortened) }) {
+                    let line = try XCTUnwrap(lines.first { $0.0.contains(time) }, "\(name) \(width): \(time) in \(lines.map(\.0))")
+                    XCTAssertGreaterThan(line.1.maxX * view.bounds.width, width - 24 - 6,
+                                         "\(time) sits at the right edge of the column")
+                }
+                if let output = ProcessInfo.processInfo.environment["M4IX_UI_PREVIEW_DIR"] {
+                    let directory = URL(fileURLWithPath: output)
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                        .write(to: directory.appendingPathComponent("chat-times-\(name)-\(Int(width)).png"))
+                }
+            }
+        }
+    }
+
     private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+}
+
+private func chatTestImage() throws -> Data {
+    let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 960, pixelsHigh: 640,
+        bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+    let bytes = try XCTUnwrap(bitmap.bitmapData)
+    for y in 0..<640 {
+        for x in 0..<960 {
+            let offset = y * bitmap.bytesPerRow + x * 3
+            bytes[offset] = x < 480 ? 100 : 220
+            bytes[offset + 1] = y < 320 ? 180 : 100
+            bytes[offset + 2] = 130
+        }
+    }
+    return try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
 }

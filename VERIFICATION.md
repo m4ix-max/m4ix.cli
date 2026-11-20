@@ -4,6 +4,97 @@ What each release changed and the evidence it was checked against, newest
 first. Notes for users are in `Packaging/RELEASE-NOTES.md`; requirements and
 the next work are in `ROADMAP.md`.
 
+## Message times for 0.19.2
+
+Every message in the chat view and in Shared chat shows its time at the
+right edge of its first line: yours above its block, a reply on its header
+or on a line of its own just above it, and a run of tool steps on its
+summary line. The first message of each day sits under a rule with its
+date, so the times stay short; hovering shows the full date and second.
+Times come from the providers' own logs: the `timestamp` on each Claude and
+Codex JSONL line, and the `timestamp` column of Hermes's messages table.
+Shared chat already saved a date with each message. A run of steps carries
+its first step's time, and a line without a stamp shows no time rather than
+an invented one. Stamps are read with `Date.ISO8601FormatStyle`, which
+parsed 50,000 of them in 36 ms on this Mac; a reused
+`ISO8601DateFormatter` took 1.7 s for the same set.
+
+On 2026-10-29 the full suite ran 169 tests, with four opt-in skips and one
+failure. `TerminalPerformanceTests.testConcurrentTerminalOutputKeepsMainActorResponsive`
+measured a 182 ms stall against its 100 ms limit while the load average
+was about 23; it passed three of three runs alone and touches no chat code.
+Launcher checks passed. New tests cover Claude and Codex stamps, including
+one without milliseconds and an unstamped line, Hermes times, day lines
+across midnight in Stockholm against UTC, and rendered times, which OCR
+finds at the right edge of the column at 800 and 440 points in both
+appearances. Previews are in `outputs/chat-times-0.19.2`. All 149 user and
+assistant lines in a live Claude log carried a stamp.
+
+Version 0.19.2 (63) was packaged from the working tree; the app signature
+and archive checksum verify. The running 0.18.13 still held 0.19.1 staged
+from 2026-10-23, and any quit installs whatever is staged, so 0.19.2
+replaced that staged copy and verifies in place. Restart to update still
+hangs, so the build installs on an ordinary quit. The installed app was not
+changed and the running app was not restarted.
+
+## Sidebar navigation for 0.19.1
+
+Active groups conversations from every project in the current account
+profile by attention and running state. Projects uses an expandable list,
+with active work above collapsed history. Search includes project paths,
+provider names, and earlier conversations. Folders with the same name show
+their parent path. Selecting a conversation routes to its own workspace and
+provider without changing its activity timestamp. Sidebar activity changes
+are observed separately from selection, avoiding session-resume effects.
+
+On 2026-10-23 the full Swift suite ran 166 tests, with four opt-in skips and
+no failures. Launcher checks passed. Eight new tests cover grouping and
+profile isolation, global search and duplicate folder names, cross-project
+selection, saved navigation, background state changes, work-to-waiting
+transitions, and rendered sidebar controls. Native pointer events verify
+the Projects tab and clearing search. An OCR check of the rendered sidebar
+verifies that Queued disappears from the row when its session starts;
+the row observes the session directly as well as the grouped list.
+Light and dark previews, expanded history, search results, and the minimum
+960 × 600 workspace were rendered
+and inspected in `outputs/sidebar-redesign`. Authenticated provider smoke
+tests were not rerun for this navigation change.
+
+Version 0.19.1 (62) was packaged from the working tree. The local app
+signature and archive checksum verify, and the build is offered to the
+running app through Restart to update. The current app was not restarted.
+
+## Sent image thumbnails and startup context for 0.18.13
+
+Version 0.18.12 fixed clipboard image detection in the composer, but chat
+history still reduced every image to a text placeholder. The transcript
+reader now derives bounded previews from Codex's embedded image data and
+Claude's base64 image blocks. It downsamples off the main thread and keeps
+only the preview in memory. Image-only messages remain visible, and a
+missing or invalid picture shows Image unavailable. No remote image URL
+is fetched and no second transcript store is created.
+
+The current Codex log wraps pictures in separate image tags and repeats
+their labels at the start of the prompt. Those tags and leading labels are
+removed when attached image blocks are present; ordinary mentions remain.
+The same log starts its workspace instructions with `# AGENTS.md instructions`,
+while the old filter required a following `for /path`. Both headings are
+now hidden along with environment context.
+
+On 2026-10-20 the full suite ran 158 tests, with four opt-in skips and no
+failures. Launcher checks passed. Regression coverage includes current and
+older startup records, both providers' embedded pictures, image-only and
+multiple-image turns, malformed image data, literal tags in ordinary text,
+incremental reads, and the clipboard placeholder fix. Chat previews at 800
+and 440 points were rendered and inspected in
+`outputs/chat-images-0.18.13/chat-images-{800,440}.png`; pixel assertions
+also check that the pictures are drawn.
+
+Version 0.18.13 (60) was packaged from the working tree and installed to
+~/Applications. The app signature and archive checksum verify, and the
+installed executable matches the package. The previous 0.18.12 app is kept
+in install-backups. The running app is offered Restart to update.
+
 ## Hermes chat colour for 0.18.11
 
 Hermes's name and mark now use violet through the same provider tint as

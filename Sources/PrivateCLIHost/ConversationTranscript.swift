@@ -5,9 +5,12 @@ struct ConversationMessage: Identifiable, Equatable, Sendable {
     let id: String
     let speaker: String
     let text: String
+    var images: [ConversationImage] = []
     /// The tool steps an agent took between two replies. A message carries
-    /// either text or steps, never both.
+    /// either content or steps, never both.
     var steps: [ConversationStep] = []
+    /// When the provider logged it. A run of steps carries its first step's.
+    var date: Date?
 }
 
 /// One tool call, titled the way a build log titles a step.
@@ -121,7 +124,7 @@ actor ConversationTranscriptReader {
                 JOIN chain ON parent.id = chain.id
                 WHERE parent.end_reason = 'compression'
             )
-            SELECT id, role, content, tool_calls FROM messages
+            SELECT id, role, content, tool_calls, timestamp FROM messages
             WHERE session_id IN chain AND id > ?2 AND role IN ('user', 'assistant')
               AND IFNULL(active, 1) != 0 AND IFNULL(display_kind, '') != 'hidden'
             ORDER BY id
@@ -140,9 +143,12 @@ actor ConversationTranscriptReader {
             lastMessageRow = max(lastMessageRow, row)
             let role = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
             let text = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
+            let date = sqlite3_column_type(statement, 4) == SQLITE_NULL ? nil
+                : Date(timeIntervalSince1970: sqlite3_column_double(statement, 4))
             let isSummary = role == "user" && (text.hasPrefix("[CONTEXT COMPACTION") || text.hasPrefix("[CONTEXT SUMMARY]"))
             if !isSummary, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                snapshot.messages.append(ConversationMessage(id: "hermes:\(row)", speaker: role == "user" ? "you" : "hermes", text: text))
+                snapshot.messages.append(ConversationMessage(id: "hermes:\(row)", speaker: role == "user" ? "you" : "hermes",
+                                                             text: text, date: date))
             }
             if role == "assistant", let calls = sqlite3_column_text(statement, 3),
                let list = try? JSONSerialization.jsonObject(with: Data(String(cString: calls).utf8)) as? [[String: Any]] {
@@ -151,7 +157,7 @@ actor ConversationTranscriptReader {
                     let arguments = (function["arguments"] as? String).flatMap {
                         try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
                     } ?? [:]
-                    append(.hermes(id: call["id"] as? String ?? "hermes:\(row):\(index)", name: name, arguments: arguments))
+                    append(.hermes(id: call["id"] as? String ?? "hermes:\(row):\(index)", name: name, arguments: arguments), date: date)
                 }
             }
             step = sqlite3_step(statement)
@@ -206,6 +212,8 @@ actor ConversationTranscriptReader {
     private func consumeLine(_ data: Data) {
         lineNumber += 1
         guard let row = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        // Both CLIs stamp every line in UTC, to the millisecond.
+        let date = (row["timestamp"] as? String).flatMap { try? Self.timestamp.parse($0) }
         let message: [String: Any]
         let key: String
         if agent == .claude {
@@ -221,7 +229,7 @@ actor ConversationTranscriptReader {
             // carry the command and files rather than the script around them.
             if row["type"] as? String == "event_msg", let payload = row["payload"] as? [String: Any],
                payload["type"] as? String == "item_completed", let item = payload["item"] as? [String: Any] {
-                ConversationStep.codex(item).forEach(append)
+                ConversationStep.codex(item).forEach { append($0, date: date) }
                 return
             }
             // event_msg mirrors these response items, so reading both would
@@ -235,24 +243,29 @@ actor ConversationTranscriptReader {
             key = messageKey(payload["id"] as? String)
         }
         guard let role = message["role"] as? String, ["user", "assistant"].contains(role) else { return }
-        let text = visibleText(message["content"], role: role)
-        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, seen.insert(key).inserted {
-            snapshot.messages.append(ConversationMessage(id: key, speaker: role == "user" ? "you" : agent.rawValue, text: text))
+        let content = visibleContent(message["content"], role: role, key: key)
+        if !content.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !content.images.isEmpty,
+           seen.insert(key).inserted {
+            snapshot.messages.append(ConversationMessage(id: key, speaker: role == "user" ? "you" : agent.rawValue,
+                                                         text: content.text, images: content.images, date: date))
         }
         guard agent == .claude, role == "assistant", let blocks = message["content"] as? [[String: Any]] else { return }
         for block in blocks where block["type"] as? String == "tool_use" {
             guard let id = block["id"] as? String, let name = block["name"] as? String else { continue }
-            append(.claude(id: id, name: name, input: block["input"] as? [String: Any] ?? [:]))
+            append(.claude(id: id, name: name, input: block["input"] as? [String: Any] ?? [:]), date: date)
         }
     }
 
+    private static let timestamp = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+
     /// Steps in a row share one activity entry; a message starts the next.
-    private func append(_ step: ConversationStep) {
+    private func append(_ step: ConversationStep, date: Date?) {
         guard seen.insert("step:" + step.id).inserted else { return }
         if let last = snapshot.messages.indices.last, !snapshot.messages[last].steps.isEmpty {
             snapshot.messages[last].steps.append(step)
         } else {
-            snapshot.messages.append(ConversationMessage(id: "steps:" + step.id, speaker: agent.rawValue, text: "", steps: [step]))
+            snapshot.messages.append(ConversationMessage(id: "steps:" + step.id, speaker: agent.rawValue, text: "",
+                                                         steps: [step], date: date))
         }
     }
 
@@ -261,26 +274,57 @@ actor ConversationTranscriptReader {
         return "line:\(lineNumber)"
     }
 
-    private func visibleText(_ content: Any?, role: String) -> String {
-        if let text = content as? String {
+    private func visibleContent(_ content: Any?, role: String, key: String) -> (text: String, images: [ConversationImage]) {
+        func visibleText(_ text: String) -> String? {
+            // Codex records injected workspace instructions as user messages.
+            // Both the older path-qualified heading and the current bare
+            // heading are context; quoted mentions in real messages stay.
+            if agent == .codex, role == "user" {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let heading = trimmed.components(separatedBy: .newlines).first ?? ""
+                if heading == "# AGENTS.md instructions" || heading.hasPrefix("# AGENTS.md instructions for ")
+                    || trimmed.hasPrefix("<environment_context>") { return nil }
+            }
             return agent == .claude && role == "user" ? Self.claudeShellText(text) ?? text : text
         }
-        guard let blocks = content as? [[String: Any]] else { return "" }
-        return blocks.compactMap { block -> String? in
+        if let text = content as? String {
+            return (visibleText(text) ?? "", [])
+        }
+        guard let blocks = content as? [[String: Any]] else { return ("", []) }
+        func isImage(_ block: [String: Any]) -> Bool {
+            ["image", "input_image"].contains(block["type"] as? String ?? "")
+        }
+        var wrappers = Set<Int>()
+        if agent == .codex {
+            for index in blocks.indices where isImage(blocks[index]) && index > 0 && index + 1 < blocks.count {
+                let before = (blocks[index - 1]["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let after = (blocks[index + 1]["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if before.hasPrefix("<image "), before.hasSuffix(">"), after == "</image>" {
+                    wrappers.formUnion([index - 1, index + 1])
+                }
+            }
+        }
+        var images: [ConversationImage] = []
+        var texts: [String] = []
+        for (index, block) in blocks.enumerated() where !wrappers.contains(index) {
             switch block["type"] as? String {
             case "text", "input_text", "output_text":
-                guard let text = block["text"] as? String else { return nil }
-                // Codex records its injected workspace instructions as user
-                // messages too; they are context rather than chat turns.
-                if agent == .codex, role == "user",
-                   text.hasPrefix("# AGENTS.md instructions for ") || text.hasPrefix("<environment_context>") {
-                    return nil
-                }
-                return text
-            case "image", "input_image": return "[Image attachment]"
-            default: return nil
+                if let text = block["text"] as? String, let visible = visibleText(text) { texts.append(visible) }
+            case "image", "input_image":
+                images.append(ConversationImage(id: "\(key):image:\(index)", block: block))
+            default: break
             }
-        }.joined(separator: "\n\n")
+        }
+        var text = texts.joined(separator: "\n\n")
+        // The CLI repeats attachment labels at the start of the actual
+        // prompt. Remove at most one per image, leaving mentions in prose.
+        if role == "user" {
+            for _ in images {
+                guard let marker = text.range(of: #"^\s*\[Image #\d+\]\s*"#, options: .regularExpression) else { break }
+                text.removeSubrange(marker)
+            }
+        }
+        return (text, images)
     }
 
     /// Claude logs a `!` command as tagged user text, `<bash-input>`, and its

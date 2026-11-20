@@ -74,6 +74,20 @@ final class PromptImageTests: XCTestCase {
         XCTAssertTrue(PromptImageStore.images(from: board, isPaste: true, in: directory).isEmpty)
         XCTAssertEqual(PromptImageStore.images(from: board, isPaste: false, in: directory).count, 1)
 
+        // An image accessibility label is not a rich-text payload.
+        for placeholder in ["[image]", " \n[Image]\n"] {
+            board.clearContents()
+            board.declareTypes([.string, .tiff], owner: nil)
+            board.setString(placeholder, forType: .string)
+            board.setData(sampleImage().tiffRepresentation, forType: .tiff)
+            XCTAssertTrue(PromptImageStore.canPasteImages(from: board))
+            XCTAssertEqual(PromptImageStore.images(from: board, isPaste: true, in: directory).count, 1)
+        }
+        board.clearContents()
+        board.setString("[image]", forType: .string)
+        XCTAssertFalse(PromptImageStore.canPasteImages(from: board))
+        XCTAssertTrue(PromptImageStore.images(from: board, isPaste: true, in: directory).isEmpty)
+
         board.clearContents()
         board.setString("just text", forType: .string)
         XCTAssertTrue(PromptImageStore.images(from: board, isPaste: true, in: directory).isEmpty)

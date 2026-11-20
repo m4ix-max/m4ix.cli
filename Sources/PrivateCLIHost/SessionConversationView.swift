@@ -107,7 +107,7 @@ struct SessionConversationView: View {
                             Text(conversationID == nil ? "New conversation" : "Loading conversation…")
                                 .font(HostTheme.serif(24))
                             if session.slotWait == nil {
-                                Text(conversationID == nil ? "Write below, or choose a conversation from History."
+                                Text(conversationID == nil ? "Write below, or open Projects for earlier conversations."
                                     : "Your messages and replies will appear here.")
                                     .font(.callout).foregroundStyle(HostTheme.graphite)
                             }
@@ -116,10 +116,16 @@ struct SessionConversationView: View {
                             }
                         }.padding(.vertical, 24)
                     }
+                    let days = ChatDay.starts(transcript.messages.map(\.date))
                     ForEach(Array(transcript.messages.enumerated()), id: \.element.id) { index, message in
-                        let continues = index > 0 && transcript.messages[index - 1].speaker == message.speaker
-                        ChatTurn(speaker: message.speaker, text: message.text, continues: continues, steps: message.steps)
-                            .padding(.top, index == 0 ? 0 : (continues ? 12 : 28) as CGFloat).id(message.id)
+                        let day = days.contains(index) ? message.date : nil
+                        let continues = index > 0 && day == nil && transcript.messages[index - 1].speaker == message.speaker
+                        VStack(alignment: .leading, spacing: 16) {
+                            if let day { ChatDay(date: day) }
+                            ChatTurn(speaker: message.speaker, text: message.text, continues: continues,
+                                     steps: message.steps, images: message.images, date: message.date)
+                        }
+                        .padding(.top, index == 0 ? 0 : (continues ? 12 : 28) as CGFloat).id(message.id)
                     }
                     if let error = transcript.error {
                         Text(error).font(.callout).foregroundStyle(HostTheme.graphite).padding(.top, 28)

@@ -58,6 +58,8 @@ final class ProjectToolsLayoutTests: XCTestCase {
             model.currentSession.refreshPromptReadiness()
             try await Task.sleep(nanoseconds: 20_000_000)
         }
+        // Let SwiftUI render the queued-to-running change before caching the window.
+        try await Task.sleep(nanoseconds: 120_000_000)
         view.layoutSubtreeIfNeeded()
         let sessions = model.liveSessionsForCurrentProject()
         XCTAssertEqual(sessions.count, 3)

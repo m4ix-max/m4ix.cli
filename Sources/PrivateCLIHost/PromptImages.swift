@@ -27,7 +27,12 @@ enum PromptImageStore {
         if !files.isEmpty {
             return files.contains { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }
         }
-        return pasteboard.string(forType: .string) == nil && NSImage.canInit(with: pasteboard)
+        guard NSImage.canInit(with: pasteboard) else { return false }
+        guard let text = pasteboard.string(forType: .string) else { return true }
+        // Some apps copy an image with the literal accessibility placeholder
+        // as their plain-text flavor. Keep normal rich-text paste precedence,
+        // but treat that placeholder as the image's label rather than content.
+        return isImagePlaceholder(text)
     }
     static let directory: URL = {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -68,9 +73,13 @@ enum PromptImageStore {
         if !files.isEmpty {
             return files.compactMap { add(fileAt: $0, in: directory) }
         }
-        if isPaste, pasteboard.string(forType: .string) != nil { return [] }
+        if isPaste, let text = pasteboard.string(forType: .string), !isImagePlaceholder(text) { return [] }
         guard NSImage.canInit(with: pasteboard), let image = NSImage(pasteboard: pasteboard) else { return [] }
         return add(image: image, in: directory).map { [$0] } ?? []
+    }
+
+    private static func isImagePlaceholder(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "[image]"
     }
 
     /// Loads images dropped from Finder, a browser, or another app.

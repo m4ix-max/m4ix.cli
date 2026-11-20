@@ -326,37 +326,116 @@ struct ChatMessageText: NSViewRepresentable {
 /// One message in a conversation. Yours sit in a block at the right, like the
 /// composer they were written in. Replies run full width under the speaker's
 /// mark, which is shown once for consecutive messages from the same speaker.
+/// Every message has its time at the right edge of its first line.
 struct ChatTurn: View {
     let speaker: String
     let text: String
     var status: String?
     var continues = false
     var steps: [ConversationStep] = []
+    var images: [ConversationImage] = []
+    var date: Date?
 
     var body: some View {
         if speaker == "you" {
-            ChatMessageText(text: text, markdown: false, hugsContent: true)
+            VStack(alignment: .trailing, spacing: 6) {
+                if let date { ChatTime(date: date) }
+                VStack(alignment: .trailing, spacing: 10) {
+                    ForEach(images) { ChatImageThumbnail(attachment: $0) }
+                    if !text.isEmpty { ChatMessageText(text: text, markdown: false, hugsContent: true) }
+                }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(HostTheme.paperDeep, in: RoundedRectangle(cornerRadius: 10))
+            }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.leading, 64)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("You")
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                if !continues || status != nil {
-                    HStack(spacing: 8) {
-                        let agent = Agent(rawValue: speaker)
-                        if let agent { PixelMark(sprite: agent.mark, color: agent.tint) }
-                        Text(speaker.uppercased()).font(HostTheme.utility(12, medium: true))
-                            .foregroundStyle(agent?.tint ?? HostTheme.ink)
-                        if let status { Text(status).font(.caption).foregroundStyle(HostTheme.graphite) }
+            let header = !continues || status != nil
+            VStack(alignment: .trailing, spacing: 4) {
+                // Without a header, a reply's time gets a line of its own,
+                // held close to the reply rather than to the turn above.
+                if !header, steps.isEmpty, let date { ChatTime(date: date) }
+                VStack(alignment: .leading, spacing: 10) {
+                    if header {
+                        HStack(spacing: 8) {
+                            let agent = Agent(rawValue: speaker)
+                            if let agent { PixelMark(sprite: agent.mark, color: agent.tint) }
+                            Text(speaker.uppercased()).font(HostTheme.utility(12, medium: true))
+                                .foregroundStyle(agent?.tint ?? HostTheme.ink)
+                            if let status { Text(status).font(.caption).foregroundStyle(HostTheme.graphite) }
+                            if let date { Spacer(minLength: 12); ChatTime(date: date) }
+                        }
                     }
-                }
-                if !steps.isEmpty { ChatActivity(steps: steps) }
-                else if text.isEmpty { ProgressView().controlSize(.small) }
-                else { ChatMessageBody(text: text) }
-            }.frame(maxWidth: .infinity, alignment: .leading)
+                    ForEach(images) { ChatImageThumbnail(attachment: $0) }
+                    if !steps.isEmpty { ChatActivity(steps: steps, date: header ? nil : date) }
+                    else if !text.isEmpty { ChatMessageBody(text: text) }
+                    else if images.isEmpty { ProgressView().controlSize(.small) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+/// The time a message was logged, in the Mac's own clock style. The day is
+/// in the line that opens it; hovering shows the full date and second.
+struct ChatTime: View {
+    let date: Date
+
+    var body: some View {
+        Text(date.formatted(date: .omitted, time: .shortened))
+            .font(HostTheme.utility(10)).foregroundStyle(HostTheme.graphite)
+            .fixedSize()
+            .help(date.formatted(date: .complete, time: .standard))
+    }
+}
+
+/// A rule and the date, above the first message of each day.
+struct ChatDay: View {
+    let date: Date
+
+    /// The messages that open a day: the first with a time, then each whose
+    /// day differs from the time before it.
+    static func starts(_ dates: [Date?], calendar: Calendar = .current) -> Set<Int> {
+        var starts = Set<Int>()
+        var previous: Date?
+        for (index, date) in dates.enumerated() {
+            guard let date else { continue }
+            if previous.map({ !calendar.isDate($0, inSameDayAs: date) }) ?? true { starts.insert(index) }
+            previous = date
+        }
+        return starts
+    }
+
+    var body: some View {
+        let thisYear = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year)
+        let style = Date.FormatStyle.dateTime.weekday(.wide).day().month(.wide)
+        HStack(spacing: 12) {
+            Rectangle().fill(HostTheme.border).frame(height: 1)
+            Text(date.formatted(thisYear ? style : style.year()).uppercased())
+                .font(HostTheme.utility(10, medium: true)).tracking(0.2)
+                .foregroundStyle(HostTheme.graphite)
+                .fixedSize()
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct ChatImageThumbnail: View {
+    let attachment: ConversationImage
+
+    var body: some View {
+        if let data = attachment.thumbnail, let image = NSImage(data: data) {
+            Image(nsImage: image)
+                .resizable().aspectRatio(contentMode: .fit)
+                .frame(maxWidth: 240, maxHeight: 180)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityLabel("Attached image")
+                .accessibilityIdentifier("chatImageThumbnail")
+        } else {
+            Label("Image unavailable", systemImage: "photo")
+                .font(.caption).foregroundStyle(HostTheme.graphite)
         }
     }
 }
@@ -364,23 +443,27 @@ struct ChatTurn: View {
 /// The tool steps between two replies: one quiet line that opens to the list.
 struct ChatActivity: View {
     let steps: [ConversationStep]
+    var date: Date?
     @State var expanded = false
 
     var body: some View {
         let summary = ConversationStep.summary(steps)
         VStack(alignment: .leading, spacing: 6) {
-            Button { expanded.toggle() } label: {
-                HStack(spacing: 8) {
-                    // As wide as the working spinner, so both lines share a text edge.
-                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
-                        .rotationEffect(.degrees(expanded ? 90 : 0)).frame(width: 16)
-                    Text(summary).lineLimit(1).truncationMode(.tail)
-                }.contentShape(Rectangle())
+            HStack(spacing: 8) {
+                Button { expanded.toggle() } label: {
+                    HStack(spacing: 8) {
+                        // As wide as the working spinner, so both lines share a text edge.
+                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0)).frame(width: 16)
+                        Text(summary).lineLimit(1).truncationMode(.tail)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(expanded ? "Hide the steps" : "Show each step")
+                .accessibilityLabel(summary)
+                .accessibilityHint(expanded ? "Hides the steps" : "Shows each step")
+                if let date { Spacer(minLength: 12); ChatTime(date: date) }
             }
-            .buttonStyle(.plain)
-            .help(expanded ? "Hide the steps" : "Show each step")
-            .accessibilityLabel(summary)
-            .accessibilityHint(expanded ? "Hides the steps" : "Shows each step")
             if expanded {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(steps, id: \.id) { step in

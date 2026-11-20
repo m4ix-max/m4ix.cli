@@ -45,10 +45,15 @@ struct SharedChatView: View {
                                     .font(.callout).foregroundStyle(HostTheme.graphite)
                             }.padding(.vertical, 24)
                         }
+                        let days = ChatDay.starts(chat.thread.messages.map { $0.date })
                         ForEach(Array(chat.thread.messages.enumerated()), id: \.element.id) { index, message in
-                            let continues = index > 0 && chat.thread.messages[index - 1].speaker == message.speaker
-                            ChatTurn(speaker: message.speaker, text: message.text, continues: continues)
-                                .padding(.top, index == 0 ? 0 : (continues ? 12 : 24) as CGFloat).id(message.id)
+                            let opensDay = days.contains(index)
+                            let continues = index > 0 && !opensDay && chat.thread.messages[index - 1].speaker == message.speaker
+                            VStack(alignment: .leading, spacing: 16) {
+                                if opensDay { ChatDay(date: message.date) }
+                                ChatTurn(speaker: message.speaker, text: message.text, continues: continues, date: message.date)
+                            }
+                            .padding(.top, index == 0 ? 0 : (continues ? 12 : 24) as CGFloat).id(message.id)
                         }
                         if let speaker = chat.activeSpeaker {
                             ChatTurn(speaker: speaker, text: chat.partialReply,

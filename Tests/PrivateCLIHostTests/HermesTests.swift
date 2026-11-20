@@ -235,6 +235,7 @@ final class HermesTests: XCTestCase {
         XCTAssertEqual(first.messages.map(\.speaker), ["you", "hermes", "hermes", "you", "hermes"])
         XCTAssertEqual(first.messages.map(\.text), ["Fix the parser", "", "Done.", "Now the tests", "Tests pass."])
         XCTAssertEqual(first.messages[1].steps.map(\.title), ["Run swift test", "Read Parser.swift"])
+        XCTAssertEqual(first.messages.map(\.date), [1, 2, 4, 8, 9].map(Date.init(timeIntervalSince1970:)))
 
         try execute(home, "INSERT INTO messages (session_id, role, content, timestamp) VALUES ('20261001_120000_bbbbbb', 'assistant', 'One more thing.', 11)")
         let second = await reader.read()
