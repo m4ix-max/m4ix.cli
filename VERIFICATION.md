@@ -57,6 +57,17 @@ and update offer. Version 0.19.3 (64) was not packaged or installed. The
 running 0.19.2 still hangs on Restart to update, so this build goes in with
 `build-and-package.sh --install`, then ⌘Q and opening the app again.
 
+The first CI run of these commits, on 2026-11-20, failed three tests that
+had only ever run on this Mac. The 0.18.13 picture test sampled every 8
+pixels, which on CI's 1x display is a quarter of the samples a Retina Mac
+takes, and counted 430 against a floor of 500; it now samples every 8
+points and asks for more than 350, where three pictures give about 430 and
+two about 290. The 0.19.2 time test looked for `10:30 PM` as OCR reads it,
+but a 12-hour clock formats it with a narrow no-break space before PM; the
+match now leaves spaces out, and it passes with the US clock and UTC that
+reproduced the failure here. The concurrent-output gate measured 92 and
+94 ms on CI in October and 119 ms that day against 100 ms; CI now gets 250.
+
 ## Message times for 0.19.2
 
 Every message in the chat view and in Shared chat shows its time at the

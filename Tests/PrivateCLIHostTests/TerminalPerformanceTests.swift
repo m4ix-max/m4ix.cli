@@ -31,7 +31,11 @@ final class TerminalPerformanceTests: XCTestCase {
         delays.sort()
         let p95 = delays[Int(Double(delays.count - 1) * 0.95)]
         print("Concurrent terminal main-actor delay: p95=\(p95)ms, max=\(delays.last!)ms, bytesFed=\(chunk.utf8.count * 400)")
-        XCTAssertLessThan(p95, 100, "Concurrent output should not stall interface work")
+        // CI's virtual Mac sits at the 100 ms line on its own (92 and 94 ms in
+        // October, 119 ms on 2026-11-20, while this Mac measured 38 ms), so it
+        // gets room that still catches a stall measured in seconds.
+        let limit: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 100 : 250
+        XCTAssertLessThan(p95, limit, "Concurrent output should not stall interface work")
     }
 
     func testLongScrollbackScreenReadLatency() throws {

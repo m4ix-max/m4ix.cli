@@ -369,16 +369,19 @@ final class ConversationChatTests: XCTestCase {
             }
             let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
             view.cacheDisplay(in: view.bounds, to: bitmap)
+            // Every 8 points at any backing scale: CI draws at 1x, a Retina Mac at 2x.
+            let step = max(1, Int((8 * CGFloat(bitmap.pixelsWide) / view.bounds.width).rounded()))
             var imagePixels = 0
-            for y in stride(from: 0, to: bitmap.pixelsHigh, by: 8) {
-                for x in stride(from: 0, to: bitmap.pixelsWide, by: 8) {
+            for y in stride(from: 0, to: bitmap.pixelsHigh, by: step) {
+                for x in stride(from: 0, to: bitmap.pixelsWide, by: step) {
                     if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
                        color.greenComponent > 0.6, color.redComponent < 0.5, color.blueComponent > 0.35 {
                         imagePixels += 1
                     }
                 }
             }
-            XCTAssertGreaterThan(imagePixels, 500, "The pictures must be drawn, not just reserve space")
+            // The three pictures sample about 430 points; two would give about 290.
+            XCTAssertGreaterThan(imagePixels, 350, "The pictures must be drawn, not just reserve space")
             if let output = ProcessInfo.processInfo.environment["M4IX_UI_PREVIEW_DIR"] {
                 let directory = URL(fileURLWithPath: output)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -835,8 +838,12 @@ final class ConversationChatTests: XCTestCase {
                     line.topCandidates(1).first.map { ($0.string, line.boundingBox) }
                 }
                 XCTAssertTrue(lines.contains { $0.0.uppercased().contains(day) }, "\(name) \(width): \(lines.map(\.0))")
+                // A 12-hour clock puts a narrow no-break space before PM and OCR
+                // reads a plain one, so the match leaves spaces out.
+                let unspaced = { (text: String) in text.filter { !$0.isWhitespace } }
                 for time in times.map({ $0.formatted(date: .omitted, time: .shortened) }) {
-                    let line = try XCTUnwrap(lines.first { $0.0.contains(time) }, "\(name) \(width): \(time) in \(lines.map(\.0))")
+                    let line = try XCTUnwrap(lines.first { unspaced($0.0).contains(unspaced(time)) },
+                                             "\(name) \(width): \(time) in \(lines.map(\.0))")
                     XCTAssertGreaterThan(line.1.maxX * view.bounds.width, width - 24 - 6,
                                          "\(time) sits at the right edge of the column")
                 }
